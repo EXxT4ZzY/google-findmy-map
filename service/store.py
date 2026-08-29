@@ -11,6 +11,7 @@ timestamp already on file is ignored.
 
 import json
 import logging
+import secrets
 import sqlite3
 import threading
 from pathlib import Path
@@ -40,6 +41,11 @@ CREATE TABLE IF NOT EXISTS geocode_cache (
     address    TEXT,            -- full display name
     fetched_at INTEGER NOT NULL,
     PRIMARY KEY (qlat, qlon)
+);
+
+CREATE TABLE IF NOT EXISTS app_config (
+    key   TEXT PRIMARY KEY,
+    value TEXT
 );
 """
 
@@ -135,6 +141,51 @@ class LocationStore:
                 "SELECT device_id, name, color FROM device_settings"
             ).fetchall()
         return {r[0]: {"name": r[1], "color": r[2]} for r in rows}
+
+    # -- application config (auth) ---------------------------------------
+
+    def get_config(self, key, default=None):
+        """Value for a config key, or ``default`` if it is not set."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM app_config WHERE key = ?", (key,)
+            ).fetchone()
+        return row[0] if row is not None else default
+
+    def get_config_many(self, keys):
+        """``{key: value}`` for the given keys that are set (missing keys omitted)."""
+        if not keys:
+            return {}
+        placeholders = ",".join("?" * len(keys))
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT key, value FROM app_config WHERE key IN ({placeholders})",
+                tuple(keys),
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def set_config(self, key, value):
+        """Upsert one config key."""
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO app_config (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = ?",
+                    (key, value, value),
+                )
+                self._conn.commit()
+            except sqlite3.Error as exc:
+                if not self._write_warned:
+                    log.warning("Could not write app config: %s", exc)
+                    self._write_warned = True
+
+    def session_secret(self):
+        """The HMAC secret for session tokens; generated and stored on first use."""
+        secret = self.get_config("session_secret")
+        if not secret:
+            secret = secrets.token_hex(32)
+            self.set_config("session_secret", secret)
+        return secret
 
     # -- reverse-geocode cache ---------------------------------------------
 

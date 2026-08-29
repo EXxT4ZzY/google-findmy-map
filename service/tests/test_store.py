@@ -151,6 +151,31 @@ class TestGeocodeCache:
         assert got["label"] is None and isinstance(got["fetched_at"], int)
 
 
+class TestConfig:
+    def test_set_then_get_roundtrip(self, store):
+        store.set_config("auth_enabled", "1")
+        assert store.get_config("auth_enabled") == "1"
+
+    def test_get_missing_returns_default(self, store):
+        assert store.get_config("missing") is None
+        assert store.get_config("missing", "0") == "0"
+
+    def test_set_config_overwrites(self, store):
+        store.set_config("k", "a")
+        store.set_config("k", "b")
+        assert store.get_config("k") == "b"
+
+    def test_get_config_many_returns_only_present_keys(self, store):
+        store.set_config("a", "1")
+        store.set_config("b", "2")
+        assert store.get_config_many(["a", "b", "c"]) == {"a": "1", "b": "2"}
+
+    def test_session_secret_is_generated_and_stable(self, store):
+        s = store.session_secret()
+        assert isinstance(s, str) and len(s) == 64
+        assert store.session_secret() == s
+
+
 class TestReadonlyFallback:
     def test_unwritable_path_falls_back_to_in_memory(self, tmp_path):
         ro = tmp_path / "ro"
