@@ -385,13 +385,22 @@ def test_throttle_allows_the_free_attempts_then_blocks():
     assert tr.retry_after("10.0.0.1", now=0) > 0
 
 
-def test_throttle_cooldown_grows():
+def test_throttle_first_cooldown_is_the_first_tier():
     tr = LoginThrottle()
-    for _ in range(6):
+    for _ in range(LoginThrottle.FREE_ATTEMPTS):
         tr.record_failure("10.0.0.1", now=0)
-    first = tr.retry_after("10.0.0.1", now=0)
-    tr.record_failure("10.0.0.1", now=0)
-    assert tr.retry_after("10.0.0.1", now=0) > first
+    # exactly FREE_ATTEMPTS failures -> first tier, not a jump to the top
+    assert tr.retry_after("10.0.0.1", now=0) == LoginThrottle.COOLDOWNS[0]
+
+
+def test_throttle_cooldown_is_monotonic_across_the_boundary():
+    tr = LoginThrottle()
+    seen = []
+    for _ in range(LoginThrottle.FREE_ATTEMPTS + 5):
+        tr.record_failure("10.0.0.1", now=0)
+        seen.append(tr.retry_after("10.0.0.1", now=0))
+    assert seen == sorted(seen)          # never decreases
+    assert seen[-1] == LoginThrottle.COOLDOWNS[-1]  # clamps at the top tier
 
 
 def test_throttle_success_clears_the_ip():
@@ -447,9 +456,11 @@ class LoginThrottle:
         now = time.time() if now is None else now
         times = self._recent(ip, now)
         level = len(times) - self.FREE_ATTEMPTS
-        if level <= 0:
+        if level < 0:
             return 0
-        cooldown = self.COOLDOWNS[min(level, len(self.COOLDOWNS)) - 1]
+        # level 0 == FREE_ATTEMPTS failures -> first cooldown tier (30 s);
+        # clamp to the last tier once level exceeds the table.
+        cooldown = self.COOLDOWNS[min(level, len(self.COOLDOWNS) - 1)]
         return max(0, math.ceil(times[-1] + cooldown - now))
 
     def record_failure(self, ip: str, *, now: float | None = None) -> None:
