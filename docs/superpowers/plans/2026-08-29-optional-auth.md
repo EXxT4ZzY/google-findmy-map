@@ -792,16 +792,9 @@ class TestAuthEndpoints:
 Run: `python -m pytest service/tests/test_api.py::TestAuthEndpoints -q`
 Expected: FAIL — 404s / assertion errors (endpoints not defined)
 
-- [ ] **Step 3: Add `_is_auth_enabled` helper and the endpoints**
+- [ ] **Step 3: Add the `LoginBody` model and the endpoints**
 
-In `service/main.py`, after the Task 4 helpers, add:
-
-```python
-def _is_auth_enabled() -> bool:
-    return not AUTH_DISABLED and _store.get_config("auth_enabled", "0") == "1"
-```
-
-Near `class DeviceSettingsBody` (~line 134), add:
+Near `class DeviceSettingsBody` (~line 134) in `service/main.py`, add:
 
 ```python
 class LoginBody(BaseModel):
