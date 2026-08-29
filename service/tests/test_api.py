@@ -290,9 +290,7 @@ class TestAuthEndpoints:
         assert r.json()["retry_after"] > 0
         assert r.headers["retry-after"]
 
-    @_NEEDS_TASK6
     def test_logout_clears_the_cookie(self, client):
-        _enable_auth(client)
         r = client.post("/api/auth/logout")
         assert r.status_code == 200
         set_cookie = r.headers.get("set-cookie", "").lower()
@@ -310,10 +308,7 @@ class TestAuthEndpoints:
                          headers={"x-forwarded-proto": "https"})
         assert "secure" in r2.headers["set-cookie"].lower()
 
-    @_NEEDS_TASK6
     def test_login_blocks_cross_site(self, client):
-        _enable_auth(client)
-        client.cookies.clear()
         r = client.post("/api/auth/login", json={"password": "secret123"},
                         headers={"sec-fetch-site": "cross-site"})
         assert r.status_code == 403
