@@ -1316,7 +1316,10 @@ Expected: `test_settings_page_is_served` passes on the stub; `test_settings_page
 
   function renderAuth() {
     const on = state.auth_enabled;
-    fields.hidden = !box.checked;
+    // Show the fields whenever there is something to enter: turning auth on
+    // (box checked) OR auth is already on (need the current password to
+    // change it or to turn it off by unchecking).
+    fields.hidden = !(box.checked || on);
     curField.hidden = !on;
     newLabel.textContent = on ? t('f_new_password_optional') : t('f_new_password');
     logoutBtn.hidden = !on;
