@@ -37,3 +37,12 @@ def test_token_expiry_and_clock_skew():
     assert parse_session_token(tok, "s3cr3t", 1, now=1000 + 29 * 86400) is True
     assert parse_session_token(tok, "s3cr3t", 1, now=1000 + 31 * 86400) is False
     assert parse_session_token(tok, "s3cr3t", 1, now=500) is False  # "issued in the future"
+
+
+def test_verify_rejects_oversized_scrypt_params():
+    assert verify_password("x", "scrypt$999999999999999999999999$8$1$abab$cdcd") is False
+
+
+def test_token_rejects_non_ascii_segments():
+    assert parse_session_token("payload.ÿÿ", "s3cr3t", 1) is False
+    assert parse_session_token("ÿÿ.sig", "s3cr3t", 1) is False

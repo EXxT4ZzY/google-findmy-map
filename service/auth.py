@@ -47,7 +47,7 @@ def verify_password(password: str, encoded: str) -> bool:
             password.encode("utf-8"), salt=salt,
             n=int(n), r=int(r), p=int(p), maxmem=_SCRYPT_MAXMEM, dklen=len(expected),
         )
-    except ValueError:
+    except (ValueError, OverflowError, TypeError):
         return False
     return hmac.compare_digest(dk, expected)
 
@@ -76,15 +76,12 @@ def parse_session_token(token: str, secret: str, cred_version: int, *,
                         max_age: int = _SESSION_MAX_AGE, now: int | None = None) -> bool:
     try:
         payload, sig = token.split(".", 1)
-    except (ValueError, AttributeError):
-        return False
-    if not hmac.compare_digest(sig, _sign(secret, payload)):
-        return False
-    try:
+        if not hmac.compare_digest(sig, _sign(secret, payload)):
+            return False
         data = json.loads(_unb64(payload))
         iat = int(data["iat"])
         version = int(data["v"])
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, AttributeError, UnicodeEncodeError):
         return False
     if version != int(cred_version):
         return False
