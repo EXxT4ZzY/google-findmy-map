@@ -90,6 +90,18 @@ def test_throttle_forgets_old_failures():
     assert tr.retry_after("10.0.0.1", now=LoginThrottle.WINDOW + 1) == 0
 
 
+def test_throttle_table_is_capped_and_keeps_recent_offenders():
+    tr = LoginThrottle()
+    # A heavily-failing IP with *recent* failures ...
+    for _ in range(LoginThrottle.FREE_ATTEMPTS + 1):
+        tr.record_failure("10.9.9.9", now=100)
+    # ... must survive a spray from more distinct addresses than the cap.
+    for i in range(LoginThrottle._MAX_IPS + 50):
+        tr.record_failure(f"10.0.{(i // 256) % 256}.{i % 256}", now=0)
+    assert len(tr._fails) <= LoginThrottle._MAX_IPS
+    assert tr.retry_after("10.9.9.9", now=100) > 0
+
+
 def test_throttle_is_per_ip():
     tr = LoginThrottle()
     for _ in range(6):

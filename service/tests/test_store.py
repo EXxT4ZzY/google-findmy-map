@@ -175,6 +175,21 @@ class TestConfig:
         assert isinstance(s, str) and len(s) == 64
         assert store.session_secret() == s
 
+    def test_session_secret_is_64_lowercase_hex(self, store):
+        s = store.session_secret()
+        assert len(s) == 64
+        assert all(c in "0123456789abcdef" for c in s)
+
+    def test_session_secret_survives_reopen(self, tmp_path):
+        first = LocationStore(tmp_path / "history.db")
+        secret = first.session_secret()
+        first.close()
+        second = LocationStore(tmp_path / "history.db")
+        try:
+            assert second.session_secret() == secret
+        finally:
+            second.close()
+
 
 class TestReadonlyFallback:
     def test_unwritable_path_falls_back_to_in_memory(self, tmp_path):

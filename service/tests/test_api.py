@@ -250,6 +250,31 @@ class TestAuthGate:
         assert client.get("/app.js").status_code == 200
         assert client.get("/api/auth/status").status_code == 200
 
+    def test_auth_disable_allows_resetting_a_forgotten_password(self, make_client):
+        """The documented recovery flow (README / SECURITY.md), end to end."""
+        c1 = make_client()
+        with c1:
+            _enable_auth(c1, "orig-pass-1")
+
+        c2 = make_client(GFM_AUTH_DISABLE="1")
+        with c2:
+            c2.cookies.clear()
+            assert c2.get("/api/auth/status").json() == {
+                "auth_enabled": False, "authenticated": False}
+            # No current_password: it is the one the operator forgot.
+            r = c2.put("/api/settings/auth",
+                       json={"enabled": True, "new_password": "brandnew-1"})
+            assert r.status_code == 200
+
+        c3 = make_client(GFM_AUTH_DISABLE="")   # escape hatch removed again
+        with c3:
+            c3.cookies.clear()
+            assert c3.post("/api/auth/login",
+                           json={"password": "brandnew-1"}).status_code == 200
+            c3.cookies.clear()
+            assert c3.post("/api/auth/login",
+                           json={"password": "orig-pass-1"}).status_code == 401
+
     def test_auth_disable_env_overrides_the_db(self, make_client):
         c1 = make_client()
         with c1:
@@ -361,6 +386,30 @@ class TestAuthSettings:
         assert r.status_code == 200 and r.json() == {"auth_enabled": True}
         client.cookies.clear()
         assert _login(client, "secret123").status_code == 200
+
+    def test_resaving_enabled_without_a_new_password_changes_nothing(self, client):
+        _enable_auth(client, "secret123")
+        store = client._main._store
+        version = store.get_config("cred_version")
+        old = dict(client.cookies)
+
+        r = client.put("/api/settings/auth", json={"enabled": True})
+        assert r.status_code == 200 and r.json() == {"auth_enabled": True}
+        assert "set-cookie" not in {k.lower() for k in r.headers}
+        assert store.get_config("cred_version") == version
+
+        client.cookies.clear()
+        client.cookies.update(old)
+        assert client.get("/api/locations").status_code == 200   # session survived
+
+    def test_saving_disabled_while_already_off_is_a_noop(self, client):
+        store = client._main._store
+        before = store.get_config_many(["auth_enabled", "password", "cred_version"])
+        r = client.put("/api/settings/auth", json={"enabled": False})
+        assert r.status_code == 200 and r.json() == {"auth_enabled": False}
+        assert "set-cookie" not in {k.lower() for k in r.headers}
+        assert store.get_config_many(["auth_enabled", "password", "cred_version"]) == before
+        assert client.get("/api/locations").status_code == 200
 
     def test_blocks_cross_site(self, client):
         r = client.put("/api/settings/auth",
