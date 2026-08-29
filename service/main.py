@@ -46,7 +46,21 @@ VISIT_RADIUS_M = float(os.environ.get("GFM_VISIT_RADIUS_M", "100"))
 VISIT_MIN_SECONDS = int(float(os.environ.get("GFM_VISIT_MIN_MINUTES", "15")) * 60)
 
 AUTH_DISABLED = os.environ.get("GFM_AUTH_DISABLE", "").strip().lower() in ("1", "true", "yes")
-LOGIN_DELAY_SECONDS = int(os.environ.get("GFM_LOGIN_DELAY_MS", "500")) / 1000
+
+
+def _login_delay_seconds(default_ms: int = 500) -> float:
+    raw = os.environ.get("GFM_LOGIN_DELAY_MS", str(default_ms))
+    try:
+        return int(raw) / 1000
+    except (TypeError, ValueError):
+        log.warning(
+            "GFM_LOGIN_DELAY_MS=%r is not an integer; falling back to %d ms.",
+            raw, default_ms,
+        )
+        return default_ms / 1000
+
+
+LOGIN_DELAY_SECONDS = _login_delay_seconds()
 
 DEFAULT_HISTORY_WINDOW_SECONDS = 7 * 24 * 3600
 
@@ -112,6 +126,31 @@ PUBLIC_PATHS = {
 }
 
 
+# The auth gate runs on *every* request, so it must not take the store lock on
+# the hot path (a slow /api/history query holds it and would serialise all
+# traffic). These two config values are read through a short TTL cache that is
+# invalidated explicitly whenever the settings endpoint writes them; the session
+# secret is memoised inside LocationStore itself.
+_CONFIG_CACHE_TTL = 2.0
+_config_cache = {"at": 0.0, "val": None}
+
+
+def _auth_config() -> dict:
+    """``{'auth_enabled': ..., 'cred_version': ...}`` with a short TTL cache.
+
+    Invalidated by :func:`_invalidate_auth_config` after a settings write.
+    """
+    now = time.monotonic()
+    if _config_cache["val"] is None or now - _config_cache["at"] > _CONFIG_CACHE_TTL:
+        _config_cache["val"] = _store.get_config_many(["auth_enabled", "cred_version"])
+        _config_cache["at"] = now
+    return _config_cache["val"]
+
+
+def _invalidate_auth_config() -> None:
+    _config_cache["val"] = None
+
+
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
@@ -147,7 +186,7 @@ _login_throttle = auth.LoginThrottle()
 async def _auth_gate(request: Request, call_next):
     if AUTH_DISABLED:
         return await call_next(request)
-    cfg = _store.get_config_many(["auth_enabled", "cred_version"])
+    cfg = _auth_config()
     if cfg.get("auth_enabled") != "1":
         return await call_next(request)
     path = request.url.path
@@ -163,11 +202,12 @@ async def _auth_gate(request: Request, call_next):
 def block_cross_site(request: Request):
     """Reject state-changing requests made from another site.
 
-    Defence in depth only -- this service has no authentication, so it MUST
-    also sit behind an authenticating reverse proxy (see SECURITY.md). This
-    uses the Fetch Metadata `Sec-Fetch-Site` header, which browsers set
-    automatically and a cross-site page cannot forge; non-browser clients
-    (curl, scripts) don't send it and are unaffected.
+    Defence in depth only, applied whether or not the optional built-in
+    authentication is enabled -- it replaces neither that nor an
+    authenticating reverse proxy (see SECURITY.md). This uses the Fetch
+    Metadata `Sec-Fetch-Site` header, which browsers set automatically and a
+    cross-site page cannot forge; non-browser clients (curl, scripts) don't
+    send it and are unaffected.
     """
     site = request.headers.get("sec-fetch-site")
     if site is not None and site not in ("same-origin", "none"):
@@ -286,7 +326,7 @@ def get_visits(device: str, start: int | None = None, end: int | None = None):
 
 @app.get("/api/auth/status")
 def auth_status(request: Request):
-    cfg = _store.get_config_many(["auth_enabled", "cred_version"])
+    cfg = _auth_config()
     enabled = not AUTH_DISABLED and cfg.get("auth_enabled") == "1"
     return {
         "auth_enabled": enabled,
@@ -308,7 +348,11 @@ async def auth_login(body: LoginBody, request: Request, response: Response):
     cfg = _store.get_config_many(["auth_enabled", "password"])
     if cfg.get("auth_enabled") != "1":
         raise HTTPException(status_code=400, detail="authentication is disabled")
-    if not auth.verify_password(body.password, cfg.get("password") or ""):
+    # scrypt costs ~40 ms of CPU; run it off the event loop so concurrent
+    # login attempts cannot stall the whole service.
+    ok = await asyncio.to_thread(auth.verify_password, body.password,
+                                 cfg.get("password") or "")
+    if not ok:
         _login_throttle.record_failure(ip)
         raise HTTPException(status_code=401, detail="wrong password")
     _login_throttle.record_success(ip)
@@ -325,7 +369,11 @@ def auth_logout(response: Response):
 @app.put("/api/settings/auth", dependencies=[Depends(block_cross_site)])
 def update_auth_settings(body: AuthSettingsBody, request: Request, response: Response):
     cfg = _store.get_config_many(["auth_enabled", "password", "cred_version"])
-    currently_on = cfg.get("auth_enabled") == "1"
+    # While the GFM_AUTH_DISABLE escape hatch is set, auth is off for every
+    # other purpose -- so this endpoint must take the bootstrap path too, or a
+    # forgotten password could never be reset (that is the whole point of the
+    # hatch; see SECURITY.md "Recovering from a forgotten password").
+    currently_on = not AUTH_DISABLED and cfg.get("auth_enabled") == "1"
     stored = cfg.get("password") or ""
     version = int(cfg.get("cred_version") or "1")
 
@@ -364,6 +412,7 @@ def update_auth_settings(body: AuthSettingsBody, request: Request, response: Res
             _store.set_config("auth_enabled", "0")
         # already off: no-op
 
+    _invalidate_auth_config()
     return {"auth_enabled": _store.get_config("auth_enabled", "0") == "1"}
 
 

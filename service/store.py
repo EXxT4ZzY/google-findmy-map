@@ -56,6 +56,7 @@ class LocationStore:
     def __init__(self, path):
         self._lock = threading.Lock()
         self._write_warned = False
+        self._session_secret = None
         self._conn = self._connect(str(path))
 
     def _connect(self, path):
@@ -180,12 +181,20 @@ class LocationStore:
                     self._write_warned = True
 
     def session_secret(self):
-        """The HMAC secret for session tokens; generated and stored on first use."""
-        secret = self.get_config("session_secret")
-        if not secret:
-            secret = secrets.token_hex(32)
-            self.set_config("session_secret", secret)
-        return secret
+        """The HMAC secret for session tokens; generated and stored on first use.
+
+        Memoised for the life of the process: if persisting it fails (read-only
+        volume, disk full) we must keep using the *same* in-memory secret, or
+        every request would mint a new one and no session cookie would ever
+        verify -- an endless redirect back to the login page.
+        """
+        if self._session_secret is None:
+            secret = self.get_config("session_secret")
+            if not secret:
+                secret = secrets.token_hex(32)
+                self.set_config("session_secret", secret)  # best-effort persist
+            self._session_secret = secret
+        return self._session_secret
 
     # -- reverse-geocode cache ---------------------------------------------
 

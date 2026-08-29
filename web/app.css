@@ -74,7 +74,7 @@ body { background: var(--bg); color: var(--text); }
   display: flex; align-items: center; justify-content: center;
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 6px;
-  cursor: pointer; font-size: 15px; line-height: 1;
+  cursor: pointer; font-size: 15px; line-height: 1; text-decoration: none;
 }
 .icon-btn:hover { background: var(--border); }
 #status { color: var(--muted); font-size: 12px; line-height: 1.5; }

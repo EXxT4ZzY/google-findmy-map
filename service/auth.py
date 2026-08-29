@@ -95,6 +95,7 @@ class LoginThrottle:
     WINDOW = 15 * 60
     FREE_ATTEMPTS = 5
     COOLDOWNS = (30, 120, 600, 1800)  # seconds; the last value repeats
+    _MAX_IPS = 4096                   # bound the table against a spray attack
 
     def __init__(self) -> None:
         self._fails: dict[str, list[float]] = {}
@@ -118,8 +119,24 @@ class LoginThrottle:
         cooldown = self.COOLDOWNS[min(level, len(self.COOLDOWNS) - 1)]
         return max(0, math.ceil(times[-1] + cooldown - now))
 
+    def _sweep(self, now: float) -> None:
+        """Drop every IP whose failures have all aged out of the window."""
+        stale = [k for k, v in self._fails.items()
+                 if all(now - t >= self.WINDOW for t in v)]
+        for k in stale:
+            del self._fails[k]
+
     def record_failure(self, ip: str, *, now: float | None = None) -> None:
         now = time.time() if now is None else now
+        # Entries are otherwise pruned only when that same IP is seen again, so
+        # a spray from many source addresses would grow the table without
+        # bound. Cap it: sweep the expired entries, then evict the IP whose
+        # most recent failure is oldest.
+        if ip not in self._fails and len(self._fails) >= self._MAX_IPS:
+            self._sweep(now)
+            if len(self._fails) >= self._MAX_IPS:
+                oldest = min(self._fails, key=lambda k: self._fails[k][-1])
+                del self._fails[oldest]
         self._fails.setdefault(ip, []).append(now)
 
     def record_success(self, ip: str) -> None:

@@ -40,6 +40,8 @@ services:
       - GFM_VISIT_RADIUS_M=${GFM_VISIT_RADIUS_M:-100}
       - GFM_VISIT_MIN_MINUTES=${GFM_VISIT_MIN_MINUTES:-15}
       - GFM_DEVICE_COLORS=${GFM_DEVICE_COLORS:-}
+      - GFM_AUTH_DISABLE=${GFM_AUTH_DISABLE:-}
+      - GFM_LOGIN_DELAY_MS=${GFM_LOGIN_DELAY_MS:-500}
     volumes:
       # SQLite database (history.db) -- persisted on the host so it survives
       # rebuilds. Treat it as sensitive personal data.

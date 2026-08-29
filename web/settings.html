@@ -144,7 +144,11 @@
       } else if (res.status === 403) {
         setMsg(t('err_current_pw'), true);
       } else if (res.status === 422) {
-        setMsg(t('err_pw_short'), true);
+        // The backend returns 422 both for a too-short password and for
+        // "a password is required"; prefer its own (English) detail.
+        let detail = '';
+        try { detail = (await res.json()).detail || ''; } catch (e) {}
+        setMsg(typeof detail === 'string' && detail ? detail : t('err_pw_short'), true);
       } else {
         setMsg(t('login_error'), true);
       }
