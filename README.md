@@ -15,6 +15,25 @@ configured GoogleFindMyTools container**: it shares that container's
 > This project is not affiliated with Google or Apple. Use at your own risk and
 > only for devices/accounts you are authorised to access.
 
+## Screenshots
+
+<img src="docs/img/map-dark.jpg" alt="Map view with several devices" width="100%">
+
+<table>
+<tr>
+<td width="50%"><img src="docs/img/timeline.jpg" alt="Timeline: full track and a list of visited places" width="100%"></td>
+<td width="50%"><img src="docs/img/edit-device.jpg" alt="Editing a device's name and pin colour" width="100%"></td>
+</tr>
+<tr>
+<td><img src="docs/img/map-light.jpg" alt="Map view, light theme" width="100%"></td>
+<td align="center"><img src="docs/img/map-mobile.jpg" alt="Mobile layout with the device list as a bottom sheet" height="420"></td>
+</tr>
+</table>
+
+![Clicking through the map and the timeline](docs/img/demo.gif)
+
+<sub>All screenshots use synthetic demo data (fictional devices moving around Berlin), not real location history.</sub>
+
 ## Requirements
 
 - An already **logged-in** GoogleFindMyTools container; its
