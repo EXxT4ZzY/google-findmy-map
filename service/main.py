@@ -205,6 +205,12 @@ class LoginBody(BaseModel):
     password: str = ""
 
 
+class AuthSettingsBody(BaseModel):
+    enabled: bool
+    new_password: str | None = None
+    current_password: str | None = None
+
+
 @app.put("/api/devices/{device_id}", dependencies=[Depends(block_cross_site)])
 def update_device(device_id: str, body: DeviceSettingsBody):
     """Set (or clear, with empty values) a device's display name and pin colour."""
@@ -314,6 +320,51 @@ async def auth_login(body: LoginBody, request: Request, response: Response):
 def auth_logout(response: Response):
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"ok": True}
+
+
+@app.put("/api/settings/auth", dependencies=[Depends(block_cross_site)])
+def update_auth_settings(body: AuthSettingsBody, request: Request, response: Response):
+    cfg = _store.get_config_many(["auth_enabled", "password", "cred_version"])
+    currently_on = cfg.get("auth_enabled") == "1"
+    stored = cfg.get("password") or ""
+    version = int(cfg.get("cred_version") or "1")
+
+    def require_current():
+        if not auth.verify_password(body.current_password or "", stored):
+            raise HTTPException(status_code=403, detail="current password is incorrect")
+
+    def require_valid_new():
+        if body.new_password is None or len(body.new_password) < PASSWORD_MIN_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail=f"password must be at least {PASSWORD_MIN_LENGTH} characters",
+            )
+
+    if body.enabled:
+        if currently_on:
+            if body.new_password is not None:          # password change
+                require_current()
+                require_valid_new()
+                _store.set_config("password", auth.hash_password(body.new_password))
+                _store.set_config("cred_version", str(version + 1))
+                _set_session_cookie(response, request)
+            # enabled -> enabled with nothing to change: no-op
+        else:                                          # enable
+            if body.new_password is not None:
+                require_valid_new()
+                _store.set_config("password", auth.hash_password(body.new_password))
+            elif not stored:
+                raise HTTPException(status_code=422, detail="a password is required")
+            _store.set_config("auth_enabled", "1")
+            _store.set_config("cred_version", str(version + 1))
+            _set_session_cookie(response, request)
+    else:
+        if currently_on:                               # disable
+            require_current()
+            _store.set_config("auth_enabled", "0")
+        # already off: no-op
+
+    return {"auth_enabled": _store.get_config("auth_enabled", "0") == "1"}
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

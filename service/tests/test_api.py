@@ -220,7 +220,6 @@ class TestAuthGate:
         assert client.get("/api/locations").status_code == 200
         assert client.get("/", follow_redirects=False).status_code == 200
 
-    @pytest.mark.xfail(reason="/api/auth/* and /api/settings/auth land in Task 6", strict=False)
     def test_enabling_auth_gates_api_and_pages(self, client):
         _enable_auth(client)                       # PUT response sets the cookie
         assert client.get("/api/locations").status_code == 200
@@ -229,7 +228,6 @@ class TestAuthGate:
         r = client.get("/", follow_redirects=False)
         assert r.status_code == 302 and "/login.html" in r.headers["location"]
 
-    @pytest.mark.xfail(reason="/api/auth/* and /api/settings/auth land in Task 6", strict=False)
     def test_allowlisted_paths_reachable_while_locked(self, client):
         _enable_auth(client)
         client.cookies.clear()
@@ -237,7 +235,6 @@ class TestAuthGate:
         assert client.get("/app.js").status_code == 200
         assert client.get("/api/auth/status").status_code == 200
 
-    @pytest.mark.xfail(reason="/api/auth/* and /api/settings/auth land in Task 6", strict=False)
     def test_auth_disable_env_overrides_the_db(self, make_client):
         c1 = make_client()
         with c1:
@@ -248,17 +245,11 @@ class TestAuthGate:
             assert c2.get("/api/locations").status_code == 200
 
 
-_NEEDS_TASK6 = pytest.mark.xfail(
-    reason="needs PUT /api/settings/auth from Task 6", strict=False
-)
-
-
 class TestAuthEndpoints:
     def test_status_reports_disabled(self, client):
         body = client.get("/api/auth/status").json()
         assert body == {"auth_enabled": False, "authenticated": False}
 
-    @_NEEDS_TASK6
     def test_status_reports_enabled_and_authenticated(self, client):
         _enable_auth(client)
         body = client.get("/api/auth/status").json()
@@ -267,7 +258,6 @@ class TestAuthEndpoints:
         body2 = client.get("/api/auth/status").json()
         assert body2["auth_enabled"] is True and body2["authenticated"] is False
 
-    @_NEEDS_TASK6
     def test_login_wrong_then_right(self, client):
         _enable_auth(client, "hunter2222")
         client.cookies.clear()
@@ -279,7 +269,6 @@ class TestAuthEndpoints:
     def test_login_when_disabled_is_400(self, client):
         assert _login(client, "whatever").status_code == 400
 
-    @_NEEDS_TASK6
     def test_login_throttles_after_free_attempts(self, client):
         _enable_auth(client)
         client.cookies.clear()
@@ -297,7 +286,6 @@ class TestAuthEndpoints:
         assert "fmm_session=" in set_cookie
         assert 'max-age=0' in set_cookie or '01 jan 1970' in set_cookie
 
-    @_NEEDS_TASK6
     def test_secure_flag_follows_forwarded_proto(self, client):
         _enable_auth(client)
         client.cookies.clear()
@@ -311,4 +299,56 @@ class TestAuthEndpoints:
     def test_login_blocks_cross_site(self, client):
         r = client.post("/api/auth/login", json={"password": "secret123"},
                         headers={"sec-fetch-site": "cross-site"})
+        assert r.status_code == 403
+
+
+class TestAuthSettings:
+    def test_enable_requires_a_password(self, client):
+        r = client.put("/api/settings/auth", json={"enabled": True})
+        assert r.status_code == 422
+
+    def test_enable_rejects_a_short_password(self, client):
+        r = client.put("/api/settings/auth", json={"enabled": True, "new_password": "short"})
+        assert r.status_code == 422
+
+    def test_enable_sets_the_cookie_and_persists(self, client):
+        r = client.put("/api/settings/auth", json={"enabled": True, "new_password": "secret123"})
+        assert r.status_code == 200 and r.json() == {"auth_enabled": True}
+        assert client.get("/api/locations").status_code == 200   # cookie from the PUT
+
+    def test_change_password_needs_current_and_rotates_sessions(self, client):
+        _enable_auth(client, "secret123")
+        old = dict(client.cookies)
+        bad = client.put("/api/settings/auth", json={
+            "enabled": True, "current_password": "WRONG", "new_password": "newpass123"})
+        assert bad.status_code == 403
+        good = client.put("/api/settings/auth", json={
+            "enabled": True, "current_password": "secret123", "new_password": "newpass123"})
+        assert good.status_code == 200
+        assert client.get("/api/locations").status_code == 200   # re-issued cookie
+        client.cookies.clear()
+        client.cookies.update(old)
+        assert client.get("/api/locations").status_code == 401   # old session invalid
+
+    def test_disable_needs_current_password(self, client):
+        _enable_auth(client, "secret123")
+        assert client.put("/api/settings/auth", json={
+            "enabled": False, "current_password": "WRONG"}).status_code == 403
+        assert client.put("/api/settings/auth", json={
+            "enabled": False, "current_password": "secret123"}).status_code == 200
+        client.cookies.clear()
+        assert client.get("/api/locations").status_code == 200
+
+    def test_reenable_with_stored_hash_needs_no_new_password(self, client):
+        _enable_auth(client, "secret123")
+        client.put("/api/settings/auth", json={"enabled": False, "current_password": "secret123"})
+        r = client.put("/api/settings/auth", json={"enabled": True})
+        assert r.status_code == 200 and r.json() == {"auth_enabled": True}
+        client.cookies.clear()
+        assert _login(client, "secret123").status_code == 200
+
+    def test_blocks_cross_site(self, client):
+        r = client.put("/api/settings/auth",
+                       json={"enabled": True, "new_password": "secret123"},
+                       headers={"sec-fetch-site": "cross-site"})
         assert r.status_code == 403
