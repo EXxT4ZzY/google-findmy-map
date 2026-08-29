@@ -215,6 +215,11 @@ def test_visits_endpoint_queues_uncached_coords_when_geocoding_is_on(client):
     assert body2["pending"] == 0
 
 
+class TestStaticPages:
+    def test_login_page_is_served(self, client):
+        assert client.get("/login.html").status_code == 200
+
+
 class TestAuthGate:
     def test_auth_is_off_by_default(self, client):
         assert client.get("/api/locations").status_code == 200

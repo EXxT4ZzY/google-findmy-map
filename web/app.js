@@ -63,6 +63,15 @@
         + 'Once more location data has accumulated, visited places will appear here.',
       unit_min: 'min',
       unit_hour: 'h',
+
+      // login page
+      page_title_login: 'FindMy Map – Sign in',
+      login_heading: 'FindMy Map',
+      f_password: 'Password',
+      sign_in: 'Sign in',
+      login_wrong: 'Wrong password.',
+      login_throttled: 'Too many attempts — try again in {n} s.',
+      login_error: 'Something went wrong. Try again.',
     },
     de: {
       toggle_theme_to_dark: 'Dunkles Design',
@@ -120,6 +129,15 @@
         + 'Sobald sich mehr Standortdaten angesammelt haben, erscheinen hier die besuchten Orte.',
       unit_min: 'Min',
       unit_hour: 'Std',
+
+      // login page
+      page_title_login: 'FindMy Map – Anmelden',
+      login_heading: 'FindMy Map',
+      f_password: 'Passwort',
+      sign_in: 'Anmelden',
+      login_wrong: 'Falsches Passwort.',
+      login_throttled: 'Zu viele Versuche — in {n} s erneut probieren.',
+      login_error: 'Etwas ist schiefgelaufen. Bitte erneut versuchen.',
     },
   };
 

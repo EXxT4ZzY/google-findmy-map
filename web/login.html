@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title data-i18n="page_title_login">FindMy Map – Sign in</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="app.css" />
+<script src="app.js"></script>
+</head>
+<body>
+<main class="auth-page">
+  <form id="login-form" class="auth-card">
+    <h1 data-i18n="login_heading">FindMy Map</h1>
+    <div class="field">
+      <label for="password" data-i18n="f_password">Password</label>
+      <input type="password" id="password" autocomplete="current-password" autofocus>
+    </div>
+    <div id="login-error" class="error-row" hidden></div>
+    <button type="submit" class="btn btn-primary" data-i18n="sign_in">Sign in</button>
+  </form>
+</main>
+<script>
+(function () {
+  const t = (k, v) => window.FindMyMap.t(k, v);
+  const form = document.getElementById('login-form');
+  const pw = document.getElementById('password');
+  const err = document.getElementById('login-error');
+  const btn = form.querySelector('button');
+
+  function safeNext() {
+    const n = new URLSearchParams(location.search).get('next') || '/';
+    return (n.startsWith('/') && !n.startsWith('//')) ? n : '/';
+  }
+  function showError(msg) { err.textContent = msg; err.hidden = false; }
+
+  (async () => {
+    try {
+      const s = await (await fetch('/api/auth/status')).json();
+      if (!s.auth_enabled || s.authenticated) location.replace(safeNext());
+    } catch (e) {}
+  })();
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pw.value }),
+      });
+      if (res.ok) { location.replace(safeNext()); return; }
+      if (res.status === 429) {
+        const secs = (await res.json()).retry_after || 30;
+        showError(t('login_throttled', { n: secs }));
+        setTimeout(() => { btn.disabled = false; }, secs * 1000);
+        return;
+      }
+      showError(t('login_wrong'));
+    } catch (e) {
+      showError(t('login_error'));
+    }
+    btn.disabled = false;
+  });
+})();
+</script>
+</body>
+</html>
