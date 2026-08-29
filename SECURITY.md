@@ -42,8 +42,9 @@ data. Back it up and store it accordingly.
 
 These do **not** replace the reverse-proxy authentication above.
 
-- **Cross-site request blocking.** `POST /api/refresh` and
-  `PUT /api/devices/{id}` reject requests whose `Sec-Fetch-Site` header is
+- **Cross-site request blocking.** `POST /api/refresh`,
+  `PUT /api/devices/{id}`, `POST /api/auth/login` and `PUT /api/settings/auth`
+  reject requests whose `Sec-Fetch-Site` header is
   `cross-site`/`same-site` (Fetch Metadata). This stops a random web page
   the operator visits from triggering polls or edits. Non-browser clients
   (curl, scripts) send no such header and are unaffected.
