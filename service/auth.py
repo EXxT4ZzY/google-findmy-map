@@ -113,7 +113,9 @@ class LoginThrottle:
         level = len(times) - self.FREE_ATTEMPTS
         if level < 0:
             return 0
-        cooldown = self.COOLDOWNS[min(level, len(self.COOLDOWNS)) - 1]
+        # level 0 == FREE_ATTEMPTS failures -> first cooldown tier (30 s);
+        # clamp to the last tier once level exceeds the table.
+        cooldown = self.COOLDOWNS[min(level, len(self.COOLDOWNS) - 1)]
         return max(0, math.ceil(times[-1] + cooldown - now))
 
     def record_failure(self, ip: str, *, now: float | None = None) -> None:

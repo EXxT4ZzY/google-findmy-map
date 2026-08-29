@@ -57,13 +57,21 @@ def test_throttle_allows_the_free_attempts_then_blocks():
     assert tr.retry_after("10.0.0.1", now=0) > 0
 
 
-def test_throttle_cooldown_grows():
+def test_throttle_first_cooldown_is_the_first_tier():
     tr = LoginThrottle()
-    for _ in range(6):
+    for _ in range(LoginThrottle.FREE_ATTEMPTS):
         tr.record_failure("10.0.0.1", now=0)
-    first = tr.retry_after("10.0.0.1", now=0)
-    tr.record_failure("10.0.0.1", now=0)
-    assert tr.retry_after("10.0.0.1", now=0) > first
+    assert tr.retry_after("10.0.0.1", now=0) == LoginThrottle.COOLDOWNS[0]
+
+
+def test_throttle_cooldown_is_monotonic_across_the_boundary():
+    tr = LoginThrottle()
+    seen = []
+    for _ in range(LoginThrottle.FREE_ATTEMPTS + 5):
+        tr.record_failure("10.0.0.1", now=0)
+        seen.append(tr.retry_after("10.0.0.1", now=0))
+    assert seen == sorted(seen)
+    assert seen[-1] == LoginThrottle.COOLDOWNS[-1]
 
 
 def test_throttle_success_clears_the_ip():
