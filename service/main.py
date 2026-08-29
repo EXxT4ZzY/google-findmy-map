@@ -104,40 +104,6 @@ async def lifespan(_app):
 app = FastAPI(lifespan=lifespan)
 
 
-_login_throttle = auth.LoginThrottle()
-
-
-@app.middleware("http")
-async def _auth_gate(request: Request, call_next):
-    if AUTH_DISABLED:
-        return await call_next(request)
-    cfg = _store.get_config_many(["auth_enabled", "cred_version"])
-    if cfg.get("auth_enabled") != "1":
-        return await call_next(request)
-    path = request.url.path
-    if path in PUBLIC_PATHS or _token_ok(request, cfg):
-        return await call_next(request)
-    if path.startswith("/api/"):
-        return JSONResponse({"detail": "authentication required"}, status_code=401)
-    query = f"?{request.url.query}" if request.url.query else ""
-    nxt = quote(path + query, safe="")
-    return RedirectResponse(f"/login.html?next={nxt}", status_code=302)
-
-
-def block_cross_site(request: Request):
-    """Reject state-changing requests made from another site.
-
-    Defence in depth only -- this service has no authentication, so it MUST
-    also sit behind an authenticating reverse proxy (see SECURITY.md). This
-    uses the Fetch Metadata `Sec-Fetch-Site` header, which browsers set
-    automatically and a cross-site page cannot forge; non-browser clients
-    (curl, scripts) don't send it and are unaffected.
-    """
-    site = request.headers.get("sec-fetch-site")
-    if site is not None and site not in ("same-origin", "none"):
-        raise HTTPException(status_code=403, detail="cross-site request rejected")
-
-
 SESSION_COOKIE = "fmm_session"
 PASSWORD_MIN_LENGTH = 8
 PUBLIC_PATHS = {
@@ -172,6 +138,40 @@ def _set_session_cookie(response: Response, request: Request) -> None:
         SESSION_COOKIE, token, max_age=30 * 24 * 3600, httponly=True,
         samesite="lax", secure=request_is_https(request), path="/",
     )
+
+
+_login_throttle = auth.LoginThrottle()
+
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    if AUTH_DISABLED:
+        return await call_next(request)
+    cfg = _store.get_config_many(["auth_enabled", "cred_version"])
+    if cfg.get("auth_enabled") != "1":
+        return await call_next(request)
+    path = request.url.path
+    if path in PUBLIC_PATHS or _token_ok(request, cfg):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
+    query = f"?{request.url.query}" if request.url.query else ""
+    nxt = quote(path + query, safe="")
+    return RedirectResponse(f"/login.html?next={nxt}", status_code=302)
+
+
+def block_cross_site(request: Request):
+    """Reject state-changing requests made from another site.
+
+    Defence in depth only -- this service has no authentication, so it MUST
+    also sit behind an authenticating reverse proxy (see SECURITY.md). This
+    uses the Fetch Metadata `Sec-Fetch-Site` header, which browsers set
+    automatically and a cross-site page cannot forge; non-browser clients
+    (curl, scripts) don't send it and are unaffected.
+    """
+    site = request.headers.get("sec-fetch-site")
+    if site is not None and site not in ("same-origin", "none"):
+        raise HTTPException(status_code=403, detail="cross-site request rejected")
 
 
 def _device_name(device_id):

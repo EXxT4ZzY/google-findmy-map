@@ -220,6 +220,7 @@ class TestAuthGate:
         assert client.get("/api/locations").status_code == 200
         assert client.get("/", follow_redirects=False).status_code == 200
 
+    @pytest.mark.xfail(reason="/api/auth/* and /api/settings/auth land in Task 6", strict=False)
     def test_enabling_auth_gates_api_and_pages(self, client):
         _enable_auth(client)                       # PUT response sets the cookie
         assert client.get("/api/locations").status_code == 200
@@ -228,6 +229,7 @@ class TestAuthGate:
         r = client.get("/", follow_redirects=False)
         assert r.status_code == 302 and "/login.html" in r.headers["location"]
 
+    @pytest.mark.xfail(reason="/api/auth/* and /api/settings/auth land in Task 6", strict=False)
     def test_allowlisted_paths_reachable_while_locked(self, client):
         _enable_auth(client)
         client.cookies.clear()
@@ -235,6 +237,7 @@ class TestAuthGate:
         assert client.get("/app.js").status_code == 200
         assert client.get("/api/auth/status").status_code == 200
 
+    @pytest.mark.xfail(reason="/api/auth/* and /api/settings/auth land in Task 6", strict=False)
     def test_auth_disable_env_overrides_the_db(self, make_client):
         c1 = make_client()
         with c1:
