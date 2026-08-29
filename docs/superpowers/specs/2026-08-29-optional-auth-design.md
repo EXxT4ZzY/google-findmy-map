@@ -250,8 +250,10 @@ Standalone page using `app.css` + `app.js` (for theme/language only).
   - `401` → show "wrong password".
   - `429` → show "too many attempts, try again in N s", disable the
     button for `retry_after` seconds.
-- `next` handling: read `?next=`, accept only if it starts with a single
-  `/` and not `//` (local paths only), else ignore.
+- `next` handling: read `?next=`, resolve it against the page's own origin
+  (`new URL(raw, location.origin)`) and accept only if the result's origin
+  equals `location.origin` — this rejects `//host`, `/\host`, absolute
+  URLs, and `javascript:` alike. Otherwise fall back to `/`.
 
 ### Component 5 — `web/settings.html`
 

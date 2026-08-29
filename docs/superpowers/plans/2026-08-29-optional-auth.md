@@ -1078,8 +1078,15 @@ Expected: PASS (stub file). Keep going — the deliverable is the real page.
   const btn = form.querySelector('button');
 
   function safeNext() {
-    const n = new URLSearchParams(location.search).get('next') || '/';
-    return (n.startsWith('/') && !n.startsWith('//')) ? n : '/';
+    const raw = new URLSearchParams(location.search).get('next');
+    if (!raw) return '/';
+    try {
+      // Resolve against our own origin; anything that lands elsewhere
+      // (//evil, /\evil, https://evil, javascript:) is rejected.
+      const u = new URL(raw, location.origin);
+      if (u.origin === location.origin) return u.pathname + u.search + u.hash;
+    } catch (e) {}
+    return '/';
   }
   function showError(msg) { err.textContent = msg; err.hidden = false; }
 
