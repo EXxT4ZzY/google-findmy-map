@@ -219,6 +219,15 @@ class TestStaticPages:
     def test_login_page_is_served(self, client):
         assert client.get("/login.html").status_code == 200
 
+    def test_settings_page_is_served(self, client):
+        assert client.get("/settings.html").status_code == 200
+
+    def test_settings_page_requires_auth_when_enabled(self, client):
+        _enable_auth(client)
+        client.cookies.clear()
+        r = client.get("/settings.html", follow_redirects=False)
+        assert r.status_code == 302 and "/login.html" in r.headers["location"]
+
 
 class TestAuthGate:
     def test_auth_is_off_by_default(self, client):

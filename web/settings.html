@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title data-i18n="page_title_settings">FindMy Map – Settings</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="app.css" />
+<script src="app.js"></script>
+</head>
+<body>
+<main class="auth-page">
+  <div class="auth-card settings-card">
+    <div class="settings-head">
+      <h1 data-i18n="settings_heading">Settings</h1>
+      <a class="btn" href="index.html" data-i18n="back_to_map">← Back to map</a>
+    </div>
+
+    <section class="settings-section">
+      <h2 data-i18n="s_language">Language</h2>
+      <div class="seg" id="lang-seg">
+        <button type="button" data-value="en">EN</button>
+        <button type="button" data-value="de">DE</button>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h2 data-i18n="s_theme">Theme</h2>
+      <div class="seg" id="theme-seg">
+        <button type="button" data-value="light" data-i18n="theme_light">Light</button>
+        <button type="button" data-value="dark" data-i18n="theme_dark">Dark</button>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <h2 data-i18n="s_auth">Authentication</h2>
+      <label class="check-row">
+        <input type="checkbox" id="auth-enabled">
+        <span data-i18n="require_login">Require login</span>
+      </label>
+
+      <div id="auth-fields" hidden>
+        <div class="field" id="cur-field" hidden>
+          <label for="cur-pw" data-i18n="f_current_password">Current password</label>
+          <input type="password" id="cur-pw" autocomplete="current-password">
+        </div>
+        <div class="field">
+          <label for="new-pw" id="new-pw-label" data-i18n="f_new_password">New password</label>
+          <input type="password" id="new-pw" autocomplete="new-password">
+        </div>
+        <div class="field">
+          <label for="confirm-pw" data-i18n="f_confirm_password">Confirm password</label>
+          <input type="password" id="confirm-pw" autocomplete="new-password">
+        </div>
+      </div>
+
+      <div id="auth-msg" hidden></div>
+      <button type="button" id="auth-save" class="btn btn-primary" data-i18n="save">Save</button>
+      <button type="button" id="logout-btn" class="btn" data-i18n="log_out" hidden>Log out</button>
+    </section>
+  </div>
+</main>
+<script>
+(function () {
+  const FMM = window.FindMyMap;
+  const t = (k, v) => FMM.t(k, v);
+
+  function wireSeg(id, get, set) {
+    const seg = document.getElementById(id);
+    function render() {
+      const cur = get ? get() : null;
+      seg.querySelectorAll('button').forEach(b =>
+        b.classList.toggle('active', b.dataset.value === cur));
+    }
+    seg.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (b && set) { set(b.dataset.value); render(); }
+    });
+    render();
+    return render;
+  }
+  const renderLang = wireSeg('lang-seg', FMM.getLang, FMM.setLang);
+  wireSeg('theme-seg', FMM.getTheme, FMM.setTheme);
+
+  const box = document.getElementById('auth-enabled');
+  const fields = document.getElementById('auth-fields');
+  const curField = document.getElementById('cur-field');
+  const newLabel = document.getElementById('new-pw-label');
+  const msg = document.getElementById('auth-msg');
+  const saveBtn = document.getElementById('auth-save');
+  const logoutBtn = document.getElementById('logout-btn');
+  const curPw = document.getElementById('cur-pw');
+  const newPw = document.getElementById('new-pw');
+  const confirmPw = document.getElementById('confirm-pw');
+  let state = { auth_enabled: false };
+
+  function renderAuth() {
+    const on = state.auth_enabled;
+    fields.hidden = !box.checked;
+    curField.hidden = !on;
+    newLabel.textContent = on ? t('f_new_password_optional') : t('f_new_password');
+    logoutBtn.hidden = !on;
+  }
+  box.addEventListener('change', renderAuth);
+
+  function setMsg(text, isError) {
+    msg.textContent = text || '';
+    msg.className = isError ? 'error-row' : 'muted';
+    msg.hidden = !text;
+  }
+
+  async function load() {
+    try { state = await (await fetch('/api/auth/status')).json(); }
+    catch (e) { state = { auth_enabled: false }; }
+    box.checked = state.auth_enabled;
+    renderAuth();
+  }
+
+  saveBtn.addEventListener('click', async () => {
+    setMsg('');
+    const enabled = box.checked;
+    const body = { enabled };
+    if (enabled) {
+      const np = newPw.value, cp = confirmPw.value;
+      if (np || cp || !state.auth_enabled) {
+        if (np.length < 8) { setMsg(t('err_pw_short'), true); return; }
+        if (np !== cp) { setMsg(t('err_pw_mismatch'), true); return; }
+        body.new_password = np;
+      }
+      if (state.auth_enabled) body.current_password = curPw.value;
+    } else {
+      body.current_password = curPw.value;
+    }
+    saveBtn.disabled = true;
+    try {
+      const res = await fetch('/api/settings/auth', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        curPw.value = newPw.value = confirmPw.value = '';
+        await load();
+        setMsg(state.auth_enabled ? t('auth_saved_on') : t('auth_saved_off'), false);
+      } else if (res.status === 403) {
+        setMsg(t('err_current_pw'), true);
+      } else if (res.status === 422) {
+        setMsg(t('err_pw_short'), true);
+      } else {
+        setMsg(t('login_error'), true);
+      }
+    } catch (e) {
+      setMsg(t('login_error'), true);
+    }
+    saveBtn.disabled = false;
+  });
+
+  logoutBtn.addEventListener('click', async () => {
+    try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
+    location.replace('/login.html');
+  });
+
+  FMM.onLangChange = () => { renderLang(); renderAuth(); };
+  load();
+})();
+</script>
+</body>
+</html>
