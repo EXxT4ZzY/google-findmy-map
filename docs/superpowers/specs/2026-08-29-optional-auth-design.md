@@ -143,7 +143,6 @@ real client (documented in `SECURITY.md`). The app itself does not parse
 | env | default | purpose |
 |---|---|---|
 | `GFM_AUTH_DISABLE` | unset | when `1`/`true`, auth is forced off regardless of `app_config`; logs a warning at startup. Forgotten-password / lockout escape hatch. |
-| `GFM_COOKIE_INSECURE` | unset | when `1`/`true`, the session cookie is set without `Secure` (plain-HTTP local testing only; logs a warning). |
 | `GFM_LOGIN_DELAY_MS` | `500` | fixed delay applied to every login attempt. `0` in tests. |
 
 **Middleware** — `@app.middleware("http")`, so it wraps the `StaticFiles`
@@ -169,8 +168,14 @@ unauthenticated*; they carry no secrets (the two JS/CSS files are the same
 ones the app already serves).
 
 **Session cookie** attributes on set: `HttpOnly; Path=/; SameSite=Lax;
-Max-Age=2592000` plus `Secure` unless `GFM_COOKIE_INSECURE`. Clearing
-sets `Max-Age=0`.
+Max-Age=2592000`, plus `Secure` when the request arrived over HTTPS.
+"Over HTTPS" is `request.headers.get("x-forwarded-proto",
+request.url.scheme) == "https"` — works whether or not uvicorn's
+`--proxy-headers` is on, and a spoofed `X-Forwarded-Proto` on a plain
+HTTP connection only causes the browser to withhold the cookie (a
+self-inflicted DoS for an on-path attacker, not a downgrade). A single
+helper `request_is_https(request) -> bool` is used by both the login and
+the settings endpoints. Clearing sets `Max-Age=0`.
 
 **Endpoints:**
 
@@ -304,11 +309,13 @@ The `#lang-toggle` and `#theme-toggle` buttons are removed.
 - **`SECURITY.md`** — replace the opening section. New content: findmy-map
   has an optional built-in login (single account, signed session cookie).
   - With it **enabled**, the service may be exposed directly, **but only
-    over HTTPS** — the cookie is `Secure` and, without TLS, both the
-    password and the cookie travel in clear. A TLS-terminating reverse
-    proxy is the normal way to get HTTPS; if it runs on the same host,
-    start uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy>` so
-    login throttling sees real client IPs.
+    over HTTPS** — without TLS the password and the session cookie travel
+    in clear. Over HTTPS the cookie is flagged `Secure` automatically
+    (detected from the request scheme / `X-Forwarded-Proto`). A
+    TLS-terminating reverse proxy is the normal way to get HTTPS; if it
+    runs on the same host, start uvicorn with `--proxy-headers
+    --forwarded-allow-ips=<proxy>` so login throttling sees real client
+    IPs (the `Secure` detection works without it).
   - With it **disabled**, the previous rule stands: run it behind an
     authenticating proxy / VPN.
   - Document `GFM_AUTH_DISABLE` (forgotten password), the per-IP throttle,
@@ -318,8 +325,7 @@ The `#lang-toggle` and `#theme-toggle` buttons are removed.
   off by default, enable + set the password on the settings page (gear
   icon), `GFM_AUTH_DISABLE=1` to recover. Add `GFM_AUTH_DISABLE` to the
   env table.
-- **`.env.example`** — commented `GFM_AUTH_DISABLE`, `GFM_COOKIE_INSECURE`
-  (with a "local testing only" warning), `GFM_LOGIN_DELAY_MS`.
+- **`.env.example`** — commented `GFM_AUTH_DISABLE` and `GFM_LOGIN_DELAY_MS`.
 - **`docker-compose.yml`** — a commented `ports:` example with a comment
   pointing at `SECURITY.md`; the default stays proxy-net-only with no
   published port.
@@ -363,6 +369,8 @@ The `#lang-toggle` and `#theme-toggle` buttons are removed.
   `Max-Age=0`).
 - `block_cross_site` still applies: `PUT /api/settings/auth` with
   `sec-fetch-site: cross-site` → `403`.
+- cookie `Secure` flag: a plain login over the test client's `http` has no
+  `Secure`; the same login with `x-forwarded-proto: https` sets `Secure`.
 
 ## Data flow
 
