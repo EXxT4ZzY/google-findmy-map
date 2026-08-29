@@ -22,12 +22,19 @@ configured GoogleFindMyTools container**: it shares that container's
 
 ## Setup
 
+Grab only `docker-compose.yml` and `.env.example` — the image is pulled from
+GHCR, no clone or local build needed:
+
 ```bash
-git clone https://github.com/EXxT4ZzY/google-findmy-map.git && cd google-findmy-map
-cp .env.example .env
+mkdir google-findmy-map && cd google-findmy-map
+curl -O https://raw.githubusercontent.com/EXxT4ZzY/google-findmy-map/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/EXxT4ZzY/google-findmy-map/main/.env.example
 # edit .env: GFM_SECRETS_FILE, GFM_DATA_DIR, PUID/PGID, PROXY_NETWORK
-docker compose up -d --build
+docker compose up -d
 ```
+
+To build from source instead, clone the repo and flip `image:` back to
+`build: .` in `docker-compose.yml`, then `docker compose up -d --build`.
 
 Key `.env` values:
 
