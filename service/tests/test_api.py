@@ -1,6 +1,7 @@
 """End-to-end checks for the HTTP API, with the heavy vendored
 ``locations`` module stubbed out."""
 
+import pathlib
 import sys
 import types
 
@@ -366,3 +367,17 @@ class TestAuthSettings:
                        json={"enabled": True, "new_password": "secret123"},
                        headers={"sec-fetch-site": "cross-site"})
         assert r.status_code == 403
+
+
+def test_real_index_header_has_gear_and_no_toggles():
+    html = (pathlib.Path(__file__).parents[2] / "web" / "index.html").read_text()
+    assert 'href="settings.html"' in html
+    assert 'id="theme-toggle"' not in html
+    assert 'id="lang-toggle"' not in html
+
+
+def test_real_timeline_header_has_gear_and_no_toggles():
+    html = (pathlib.Path(__file__).parents[2] / "web" / "timeline.html").read_text()
+    assert 'href="settings.html"' in html
+    assert 'id="theme-toggle"' not in html
+    assert 'id="lang-toggle"' not in html

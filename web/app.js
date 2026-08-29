@@ -6,10 +6,7 @@
   // English is the source language and the fallback for any missing key.
   var STRINGS = {
     en: {
-      toggle_theme_to_dark: 'Dark theme',
-      toggle_theme_to_light: 'Light theme',
       toggle_sheet: 'Collapse / expand panel',
-      switch_language: 'Auf Deutsch wechseln',
       unknown: 'unknown',
 
       // index page
@@ -95,10 +92,7 @@
       err_current_pw: 'Current password is incorrect.',
     },
     de: {
-      toggle_theme_to_dark: 'Dunkles Design',
-      toggle_theme_to_light: 'Helles Design',
       toggle_sheet: 'Panel ein-/ausklappen',
-      switch_language: 'Switch to English',
       unknown: 'unbekannt',
 
       app_title: 'FindMy Map',
@@ -229,22 +223,6 @@
   function applyTheme(theme) {
     document.documentElement.dataset.theme = theme;
     try { localStorage.setItem('theme', theme); } catch (e) {}
-    var btn = document.getElementById('theme-toggle');
-    if (btn) {
-      var clickGoesToDark = theme === 'light';
-      btn.textContent = clickGoesToDark ? '☾' : '☀';
-      btn.title = t(clickGoesToDark ? 'toggle_theme_to_dark' : 'toggle_theme_to_light');
-      btn.setAttribute('aria-label', btn.title);
-    }
-  }
-
-  // ---- language toggle -----------------------------------------------
-  function applyLangToggle() {
-    var btn = document.getElementById('lang-toggle');
-    if (!btn) return;
-    btn.textContent = lang.toUpperCase();
-    btn.title = t('switch_language');
-    btn.setAttribute('aria-label', btn.title);
   }
 
   function setLang(next) {
@@ -252,8 +230,6 @@
     try { localStorage.setItem('lang', next); } catch (e) {}
     document.documentElement.lang = next;
     applyStaticI18n();
-    applyLangToggle();
-    applyTheme(currentTheme());  // refresh the theme tooltip in the new language
     if (typeof window.FindMyMap.onLangChange === 'function') {
       window.FindMyMap.onLangChange(next);
     }
@@ -266,27 +242,20 @@
   window.FindMyMap.getLang = function () { return lang; };
   window.FindMyMap.onThemeChange = null;
   window.FindMyMap.onLangChange = null;
+  window.FindMyMap.setLang = setLang;
+  window.FindMyMap.getTheme = currentTheme;
+  window.FindMyMap.setTheme = function (theme) {
+    applyTheme(theme === 'light' ? 'light' : 'dark');
+    if (typeof window.FindMyMap.onThemeChange === 'function') {
+      window.FindMyMap.onThemeChange(theme);
+    }
+  };
 
   document.documentElement.lang = lang;
 
   function setup() {
     applyStaticI18n();
-    applyLangToggle();
     applyTheme(currentTheme());
-
-    var themeBtn = document.getElementById('theme-toggle');
-    if (themeBtn) themeBtn.addEventListener('click', function () {
-      var next = currentTheme() === 'light' ? 'dark' : 'light';
-      applyTheme(next);
-      if (typeof window.FindMyMap.onThemeChange === 'function') {
-        window.FindMyMap.onThemeChange(next);
-      }
-    });
-
-    var langBtn = document.getElementById('lang-toggle');
-    if (langBtn) langBtn.addEventListener('click', function () {
-      setLang(lang === 'de' ? 'en' : 'de');
-    });
   }
 
   if (document.readyState !== 'loading') setup();
