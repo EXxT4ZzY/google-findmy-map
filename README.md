@@ -96,17 +96,6 @@ Siehe `.env.example`. Kurzfassung:
 | `GFM_GEOCODE_EMAIL` | – | Kontakt-E-Mail als `email=`-Parameter (OSM-Richtlinie) |
 | `GFM_VISIT_RADIUS_M` / `GFM_VISIT_MIN_MINUTES` | `100` / `15` | Definition „besuchter Ort" |
 
-## Tests
-
-```bash
-python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest
-```
-
-Decken die Logik + HTTP-API ab und brauchen weder die vendorte Bibliothek
-noch Auth-Daten noch Netzzugriff (`locations` und der HTTP-Client des
-Geocoders werden gestubbt).
-
 ## Bekannte Einschränkungen
 
 - Der Standortverlauf wächst unbegrenzt (keine Aufräum-Logik). Für SQLite
