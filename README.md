@@ -87,6 +87,18 @@ All other (optional) variables are documented in `.env.example`.
   `GFM_VISIT_RADIUS_M`) spanning at least `GFM_VISIT_MIN_MINUTES` — with a still
   sparse history a note is shown, and it fills in over time.
 
+### Authentication
+
+Optional and **off by default**. Open the settings page (the ⚙ icon in the
+header), tick **Require login** and set a password (min. 8 characters).
+From then on every page and API call needs the session cookie from the
+login page. The same settings page changes the password or turns auth off
+again (both ask for the current password).
+
+If you lock yourself out, set `GFM_AUTH_DISABLE=1` and restart — auth is
+forced off so you can reset it. With auth enabled you can expose the
+service directly, but **only over HTTPS** (see `SECURITY.md`).
+
 ## How it works
 
 - `Dockerfile` clones `GoogleFindMyTools` (commit pinned via
@@ -122,6 +134,8 @@ See `.env.example`. Summary:
 | `GFM_NOMINATIM_URL` | public OSM Nominatim | reverse geocoding; **empty = off** |
 | `GFM_GEOCODE_EMAIL` | – | contact email sent as the `email=` parameter (OSM policy) |
 | `GFM_VISIT_RADIUS_M` / `GFM_VISIT_MIN_MINUTES` | `100` / `15` | definition of a "visited place" |
+| `GFM_AUTH_DISABLE` | – | `1` forces the optional login off (recovery from a lost password) |
+| `GFM_LOGIN_DELAY_MS` | `500` | fixed delay per login attempt |
 
 ## Known limitations
 

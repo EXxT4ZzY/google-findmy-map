@@ -1,19 +1,39 @@
 # Security
 
-## The service has no authentication — put it behind an authenticating proxy
+## Authentication
 
-`findmy-map` exposes the **full location history** of your devices and the
-**addresses they visited**, and lets any caller rename devices or trigger
-polls. It has **no login, no API key, no access control of any kind**.
+`findmy-map` has an **optional** built-in login: a single account (the
+form asks only for a password), a signed session cookie, and per-IP
+throttling of failed attempts. It is **disabled by default**. Enable it
+and set the password on the settings page (the gear icon in the header).
 
-Anyone who can reach the HTTP port can see everywhere your devices have been.
+### With authentication enabled
 
-**You must run it behind a reverse proxy that enforces authentication**
-(HTTP Basic auth, an OAuth2 proxy such as `oauth2-proxy`, Authelia,
-Cloudflare Access, Tailscale, a VPN, …). The provided `docker-compose.yml`
-publishes **no ports** and attaches the container only to an external
-`proxy-net` network for exactly this reason — do not add a `ports:` mapping
-that exposes it directly.
+You may expose the service directly — **but only over HTTPS**. Without
+TLS the password and the session cookie travel in clear. When the request
+is HTTPS the cookie is flagged `Secure` automatically (detected from the
+request scheme / `X-Forwarded-Proto`).
+
+A TLS-terminating reverse proxy is the usual way to add HTTPS. If it runs
+on the same host, start uvicorn with `--proxy-headers
+--forwarded-allow-ips=<proxy-ip>` so the login throttle sees real client
+IPs (the `Secure` detection works regardless).
+
+`GFM_LOGIN_DELAY_MS` (default `500`) is a fixed delay added to every login
+attempt. After 5 failures from one IP within 15 minutes that IP is put on
+a cooldown that grows 30 s → 2 min → 10 min → 30 min.
+
+**Forgot the password / locked out:** set `GFM_AUTH_DISABLE=1` in the
+environment and restart — authentication is then forced off regardless of
+the stored setting, so you can open the settings page and set a new one.
+
+### With authentication disabled
+
+The service has **no access control of any kind** — anyone who can reach
+the HTTP port sees the full location history. You **must** run it behind
+an authenticating reverse proxy, a VPN, or Tailscale. The provided
+`docker-compose.yml` publishes no ports and attaches only to an external
+`proxy-net` network for this reason.
 
 Treat the database at `${GFM_DATA_DIR}/history.db` as sensitive personal
 data. Back it up and store it accordingly.
@@ -37,6 +57,16 @@ These do **not** replace the reverse-proxy authentication above.
   gets your IP blocked by the public OSM Nominatim.
 - **Non-root container.** The service runs as an unprivileged UID
   (`${PUID}:${PGID}`).
+- **Password storage.** The password is stored as a stdlib `scrypt` hash
+  (`n=2^14, r=8, p=1`), never in clear; verification is constant-time.
+- **Session tokens.** The session cookie is an HMAC-SHA256-signed token
+  bound to a `cred_version` counter; changing the password (or toggling
+  auth on) increments it and invalidates every existing session.
+- **The `current_password` check on the settings page is not rate-limited.**
+  It is only reachable with a valid session (the auth gate requires one
+  when auth is on), and `scrypt` verification is deliberately slow, so
+  brute-forcing it from an already-authenticated session is impractical —
+  but it is not behind the login throttle.
 
 ## Supply chain
 

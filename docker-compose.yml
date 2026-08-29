@@ -16,7 +16,7 @@ services:
 
   findmy-map:
     # Pull the published image -- no repo clone or local build needed.
-    image: ghcr.io/exxt4zzy/google-findmy-map:0.1.1
+    image: ghcr.io/exxt4zzy/google-findmy-map:0.1.2
     # To build locally instead (e.g. for development), comment out the line
     # above and uncomment the one below:
     # build: .
@@ -27,6 +27,11 @@ services:
         condition: service_completed_successfully
     networks:
       - proxy-net
+    # findmy-map has an optional built-in login (see SECURITY.md). With it
+    # enabled you can publish the port directly instead of going through
+    # proxy-net -- but only behind HTTPS. Uncomment and adjust:
+    # ports:
+    #   - "127.0.0.1:8080:8080"
     environment:
       - PYTHONUNBUFFERED=1
       - GFM_POLL_INTERVAL_SECONDS=${GFM_POLL_INTERVAL_SECONDS:-120}
