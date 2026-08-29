@@ -1,0 +1,229 @@
+/* Shared dark theme for the FindMy Map pages (index.html + timeline.html). */
+
+:root {
+  --bg: #14161a;
+  --panel: #1e2126;
+  --panel-2: #262a31;
+  --border: #2c313a;
+  --text: #e4e7eb;
+  --muted: #9aa3af;
+  --error: #ff6b6b;
+  --accent: #4e9bff;
+  --attr-bg: rgba(20, 22, 26, 0.8);
+}
+:root[data-theme="light"] {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --panel-2: #eef0f3;
+  --border: #d6dae1;
+  --text: #1a1d21;
+  --muted: #5c636e;
+  --error: #d1333b;
+  --accent: #2563eb;
+  --attr-bg: rgba(255, 255, 255, 0.85);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+body { background: var(--bg); color: var(--text); }
+
+/* The map always fills the whole viewport; the sidebar floats on top of it
+   (a bottom sheet on mobile, a content-sized panel on desktop -- see the
+   media queries at the end). */
+#app { position: relative; height: 100%; }
+#map { position: absolute; inset: 0; background: var(--bg); }
+
+/* Leaflet tweaks */
+.leaflet-container { background: var(--bg); }
+/* In the dark theme, darken the standard (detailed) OSM raster tiles right
+   in the browser -- no API-key'd dark tile provider needed. Only the tile
+   pane is filtered, so markers, tracks, popups and controls keep their
+   real colours. The light theme uses the tiles as-is. */
+:root:not([data-theme="light"]) .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(183deg) brightness(0.72) contrast(1.1)
+          grayscale(0.25) saturate(0.7);
+}
+.leaflet-bar a,
+.leaflet-bar a:hover {
+  background: var(--panel); color: var(--text); border-color: var(--border);
+}
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: var(--panel); color: var(--text);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+}
+.leaflet-container a { color: var(--accent); }
+.leaflet-control-attribution {
+  background: var(--attr-bg) !important; color: var(--muted) !important;
+}
+
+#sidebar {
+  position: absolute; z-index: 1000;
+  background: var(--panel);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+#sidebar-header {
+  flex-shrink: 0;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+}
+#sidebar-header h1 { font-size: 16px; margin: 0; }
+.header-row {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.header-row h1 { flex: 1; }
+.icon-btn {
+  flex-shrink: 0; width: 30px; height: 30px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  cursor: pointer; font-size: 15px; line-height: 1;
+}
+.icon-btn:hover { background: var(--border); }
+#status { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.error-row { color: var(--error); }
+.muted { color: var(--muted); }
+
+.btn {
+  display: inline-block; margin-top: 10px; padding: 7px 12px; width: 100%;
+  cursor: pointer; text-align: center; text-decoration: none;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel-2); color: var(--text); font-size: 13px;
+}
+.btn:hover { background: #313742; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #0b1220; font-weight: 600; }
+.btn-primary:hover { background: #6aabff; }
+
+/* Form controls (timeline sidebar) */
+.field { margin-top: 10px; }
+.field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+.field select, .field input {
+  width: 100%; padding: 6px 8px; font-size: 13px;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.field input::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.6; }
+
+/* Device list (index page) */
+#device-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; }
+.device {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px; border-radius: 8px; cursor: pointer;
+}
+.device:hover { background: var(--panel-2); }
+.device .dot {
+  width: 12px; height: 12px; border-radius: 50%; margin-top: 3px;
+  flex-shrink: 0; border: 1px solid rgba(255,255,255,0.5);
+}
+.device .meta { min-width: 0; }
+.device .name {
+  font-size: 13px; font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.device .time { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.device-edit-btn {
+  margin-left: auto; flex-shrink: 0; align-self: center;
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 14px; padding: 4px 6px; border-radius: 6px;
+}
+.device-edit-btn:hover { color: var(--text); background: var(--border); }
+
+.device-editor {
+  margin: 0 6px 8px; padding: 12px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+}
+.device-editor .field:first-child { margin-top: 0; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.swatch {
+  width: 26px; height: 26px; padding: 0; border-radius: 50%;
+  cursor: pointer; border: 2px solid transparent;
+}
+.swatch:hover { border-color: var(--muted); }
+.swatch.selected { border-color: var(--text); }
+.editor-actions { display: flex; gap: 6px; margin-top: 12px; }
+.editor-actions .btn { margin-top: 0; }
+.btn-small { padding: 5px 8px; font-size: 12px; }
+
+/* Scrollable region below the sidebar header */
+.sidebar-body { overflow-y: auto; flex: 1; padding: 12px 16px; }
+
+/* Visited-places list (timeline page) */
+.visits { margin-top: 14px; }
+.visits h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); margin: 0 0 6px;
+}
+.visits-note:not(:empty) {
+  font-size: 12px; color: var(--muted); margin-bottom: 6px;
+}
+.visits-empty {
+  font-size: 12px; color: var(--muted); line-height: 1.5; margin: 4px 0 0;
+}
+.visit {
+  display: flex; gap: 10px; padding: 8px 6px; border-radius: 8px;
+  cursor: pointer;
+}
+.visit:hover { background: var(--panel-2); }
+.visit-num {
+  flex-shrink: 0; width: 20px; height: 20px; margin-top: 1px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #fff; border-radius: 50%;
+  font-size: 11px; font-weight: 700;
+}
+.visit-body { min-width: 0; }
+.visit-place { font-size: 13px; font-weight: 600; }
+.visit-place.pending { color: var(--muted); font-weight: 400; font-style: italic; }
+.visit-when { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* Numbered stop markers on the map */
+.visit-marker { background: none; border: none; }
+.visit-marker span {
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 700 12px/1 system-ui, sans-serif;
+  border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+
+#sheet-toggle { display: none; }
+
+/* --- Desktop: sidebar is a floating panel sized to its content -------- */
+@media (min-width: 641px) {
+  #sidebar {
+    top: 12px; right: 12px;
+    width: 300px; max-height: calc(100vh - 24px);
+    border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 6px 28px rgba(0, 0, 0, 0.55);
+  }
+  /* Grow only as far as the content needs; scroll inside once the panel
+     hits its max height instead of stretching to fill the screen. */
+  #device-list,
+  .sidebar-body { flex: 0 1 auto; min-height: 0; }
+  #device-list:empty { display: none; }
+}
+
+/* --- Mobile: sidebar becomes a bottom sheet --------------------------- */
+@media (max-width: 640px) {
+  #app { display: block; position: relative; }
+  #map { position: absolute; inset: 0; }
+  #sidebar {
+    position: absolute; left: 0; right: 0; bottom: 0; top: auto;
+    width: auto; height: auto; max-height: 60vh;
+    border-right: none; border-top: 1px solid var(--border);
+    border-radius: 14px 14px 0 0;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.5);
+    transform: translateY(0); transition: transform 0.25s ease;
+    z-index: 1000;
+  }
+  #sidebar.collapsed { transform: translateY(calc(100% - 52px)); }
+  #sidebar-header { padding-top: 10px; }
+  #sheet-toggle {
+    display: block; width: 100%; background: none; border: none;
+    color: var(--muted); font-size: 12px; cursor: pointer;
+    padding: 2px 0 8px;
+  }
+  #sheet-toggle::before {
+    content: ""; display: block; width: 36px; height: 4px;
+    background: var(--border); border-radius: 2px; margin: 0 auto 8px;
+  }
+  .leaflet-top.leaflet-left { top: auto; }
+}

@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime data / secrets -- never commit these
+.env
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.migrated
+secrets.json
+.auth_done.json
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>FindMy Map – Zeitachse</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="app.css" />
+<script src="app.js"></script>
+</head>
+<body>
+<div id="app">
+  <div id="map"></div>
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <button id="sheet-toggle" type="button" aria-label="Panel ein-/ausklappen"></button>
+      <div class="header-row">
+        <h1>Zeitachse</h1>
+        <button id="theme-toggle" class="icon-btn" type="button" aria-label="Design umschalten">☀</button>
+      </div>
+      <a class="btn" href="index.html">← Zurück zur Karte</a>
+    </div>
+    <div class="sidebar-body">
+      <div class="field">
+        <label for="device">Gerät</label>
+        <select id="device"></select>
+      </div>
+      <div class="field">
+        <label for="from">Von</label>
+        <input type="date" id="from">
+      </div>
+      <div class="field">
+        <label for="to">Bis</label>
+        <input type="date" id="to">
+      </div>
+      <button id="show-btn" class="btn btn-primary" type="button">Anzeigen</button>
+      <div id="status" class="muted" style="margin-top: 12px;"></div>
+      <div id="visits" class="visits" hidden>
+        <h2>Besuchte Orte</h2>
+        <div id="visits-note" class="visits-note"></div>
+        <div id="visits-list"></div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map', { zoomControl: true }).setView([51.1657, 10.4515], 6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+
+const layer = L.layerGroup().addTo(map);
+const visitLayer = L.layerGroup().addTo(map);
+const deviceColors = new Map();
+let visitsRun = 0;   // bumped on each show() so stale geocode retries stop
+
+function fmtTime(unixSeconds) {
+  if (!unixSeconds) return 'unbekannt';
+  return new Date(unixSeconds * 1000).toLocaleString('de-DE');
+}
+
+function fmtClock(ts) {
+  return new Date(ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+}
+
+function fmtDay(ts) {
+  return new Date(ts * 1000).toLocaleDateString('de-DE',
+    { weekday: 'short', day: '2-digit', month: '2-digit' });
+}
+
+function fmtDuration(seconds) {
+  const m = Math.round(seconds / 60);
+  if (m < 60) return `${m} Min`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h} Std ${m % 60} Min` : `${h} Std`;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+function toDateInput(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function setStatus(html) {
+  document.getElementById('status').innerHTML = html;
+}
+
+// Keep the auto-fit clear of the floating panel (top-right on desktop).
+function fitPadding() {
+  return window.matchMedia('(min-width: 641px)').matches
+    ? { paddingTopLeft: [60, 60], paddingBottomRight: [330, 60] }
+    : { padding: [50, 50] };
+}
+
+// Great-circle distance in metres, for thinning dense marker clusters.
+function metres(a, b) {
+  const R = 6371000, rad = x => x * Math.PI / 180;
+  const dLat = rad(b[0] - a[0]), dLon = rad(b[1] - a[1]);
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+async function loadDevices() {
+  const sel = document.getElementById('device');
+  let state;
+  try {
+    state = await (await fetch('/api/locations')).json();
+  } catch (e) {
+    setStatus('<span class="error-row">Server nicht erreichbar.</span>');
+    return;
+  }
+  const devices = (state.devices || []).slice()
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  for (const d of devices) {
+    deviceColors.set(d.id, d.color || '#4e9bff');
+    const opt = document.createElement('option');
+    opt.value = d.id;
+    opt.textContent = d.name || d.id;
+    sel.appendChild(opt);
+  }
+  if (!devices.length) setStatus('Keine Geräte gefunden.');
+}
+
+function selectedRange() {
+  const from = document.getElementById('from').value;
+  const to = document.getElementById('to').value;
+  const start = from ? Math.floor(new Date(from + 'T00:00:00').getTime() / 1000) : '';
+  const end = to ? Math.floor(new Date(to + 'T23:59:59').getTime() / 1000) : '';
+  return { start, end };
+}
+
+async function show() {
+  const id = document.getElementById('device').value;
+  if (!id) return;
+  const { start, end } = selectedRange();
+  const btn = document.getElementById('show-btn');
+  btn.disabled = true;
+  btn.textContent = 'Lädt…';
+  const run = ++visitsRun;
+  try {
+    const url = `/api/history?device=${encodeURIComponent(id)}&start=${start}&end=${end}`;
+    const hasTrack = render(await (await fetch(url)).json());
+    if (hasTrack) loadVisits(id, start, end, run, 0);
+  } catch (e) {
+    setStatus('<span class="error-row">Fehler beim Laden des Verlaufs.</span>');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Anzeigen';
+  }
+}
+
+async function loadVisits(id, start, end, run, attempt) {
+  if (run !== visitsRun) return;   // a newer show() superseded this one
+  let data;
+  try {
+    const url = `/api/visits?device=${encodeURIComponent(id)}&start=${start}&end=${end}`;
+    data = await (await fetch(url)).json();
+  } catch (e) {
+    return;
+  }
+  if (run !== visitsRun) return;
+  renderVisits(data);
+
+  // Addresses are geocoded in the background -- refetch a few times to fill
+  // in the ones that were still pending.
+  if (data.geocoding && data.pending > 0 && attempt < 6) {
+    setTimeout(() => loadVisits(id, start, end, run, attempt + 1), 3000);
+  }
+}
+
+function renderVisits(data) {
+  visitLayer.clearLayers();
+  const box = document.getElementById('visits');
+  const list = document.getElementById('visits-list');
+  const visits = data.visits || [];
+
+  box.hidden = false;
+  list.innerHTML = '';
+
+  const note = document.getElementById('visits-note');
+  note.textContent = data.geocoding ? '' : 'Adressen deaktiviert (GFM_NOMINATIM_URL leer).';
+
+  if (!visits.length) {
+    list.innerHTML = '<p class="visits-empty">Keine Aufenthalte (mind. 15 Min am '
+      + 'selben Ort) im gewählten Zeitraum. Sobald sich mehr Standortdaten angesammelt '
+      + 'haben, erscheinen hier die besuchten Orte.</p>';
+    return;
+  }
+
+  visits.forEach((v, i) => {
+    const n = i + 1;
+    const place = v.label || (v.address ? v.address.split(',')[0] : null)
+      || `${v.lat.toFixed(4)}, ${v.lon.toFixed(4)}`;
+    const pending = !v.label && !v.address && data.geocoding;
+    const sameDay = fmtDay(v.start) === fmtDay(v.end);
+    const when = sameDay
+      ? `${fmtDay(v.start)}, ${fmtClock(v.start)}–${fmtClock(v.end)}`
+      : `${fmtDay(v.start)} ${fmtClock(v.start)} – ${fmtDay(v.end)} ${fmtClock(v.end)}`;
+
+    const row = document.createElement('div');
+    row.className = 'visit';
+    row.innerHTML = `
+      <span class="visit-num">${n}</span>
+      <span class="visit-body">
+        <span class="visit-place${pending ? ' pending' : ''}">${
+          pending ? 'Adresse wird ermittelt…' : escapeHtml(place)}</span>
+        <span class="visit-when">${when} · ${fmtDuration(v.end - v.start)}</span>
+      </span>`;
+
+    const marker = L.marker([v.lat, v.lon], {
+      icon: L.divIcon({ className: 'visit-marker', html: `<span>${n}</span>`,
+        iconSize: [24, 24], iconAnchor: [12, 12] }),
+    }).addTo(visitLayer).bindPopup(
+      `<b>${n}. ${escapeHtml(v.label || place)}</b><br>${when}<br>${fmtDuration(v.end - v.start)}`);
+
+    row.addEventListener('click', () => {
+      map.flyTo([v.lat, v.lon], Math.max(map.getZoom(), 16));
+      marker.openPopup();
+      if (window.matchMedia('(max-width: 640px)').matches) {
+        document.getElementById('sidebar').classList.add('collapsed');
+      }
+    });
+    list.appendChild(row);
+  });
+}
+
+function render(data) {
+  layer.clearLayers();
+  visitLayer.clearLayers();
+  const color = deviceColors.get(data.device) || '#4e9bff';
+  const pts = (data.points || []).filter(p => p.latitude != null && p.longitude != null);
+
+  if (!pts.length) {
+    setStatus('Keine Standorte im gewählten Zeitraum.');
+    document.getElementById('visits').hidden = true;
+    return false;
+  }
+
+  const latlngs = pts.map(p => [p.latitude, p.longitude]);
+
+  // The full track -- every point, as one line.
+  L.polyline(latlngs, { color, weight: 3, opacity: 0.7 }).addTo(layer);
+
+  // Start and end, emphasised.
+  L.circleMarker(latlngs[0], { radius: 7, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 })
+    .addTo(layer).bindPopup(`<b>Start</b><br>${fmtTime(pts[0].time)}`);
+  L.circleMarker(latlngs[latlngs.length - 1], { radius: 7, color: '#fff', weight: 2, fillColor: '#fff', fillOpacity: 1 })
+    .addTo(layer).bindPopup(`<b>Ende</b><br>${fmtTime(pts[pts.length - 1].time)}`);
+
+  // Intermediate points: skip any within 30 m of the last drawn one so
+  // stationary stretches don't bury the map in dots (the line stays whole).
+  let last = latlngs[0];
+  for (let i = 1; i < pts.length - 1; i++) {
+    if (metres(last, latlngs[i]) < 30) continue;
+    last = latlngs[i];
+    L.circleMarker(latlngs[i], { radius: 3, color, weight: 1, fillColor: color, fillOpacity: 0.6 })
+      .addTo(layer).bindPopup(fmtTime(pts[i].time));
+  }
+
+  map.fitBounds(latlngs, { ...fitPadding(), maxZoom: 16 });
+  setStatus(`${pts.length} Standorte<br>${fmtTime(pts[0].time)} – ${fmtTime(pts[pts.length - 1].time)}`);
+  return true;
+}
+
+document.getElementById('to').value = toDateInput(new Date());
+document.getElementById('from').value = toDateInput(new Date(Date.now() - 7 * 24 * 3600 * 1000));
+
+document.getElementById('show-btn').addEventListener('click', show);
+document.getElementById('device').addEventListener('change', show);
+document.getElementById('sheet-toggle').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+  setTimeout(() => map.invalidateSize(), 300);
+});
+
+loadDevices().then(show);
+</script>
+</body>
+</html>

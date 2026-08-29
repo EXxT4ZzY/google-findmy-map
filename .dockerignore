@@ -1,0 +1,23 @@
+# Keep the build context small and free of things the image never needs.
+.git/
+.github/
+.venv/
+venv/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+service/tests/
+.env
+.env.example
+data/
+*.db
+*.db-wal
+*.db-shm
+*.migrated
+requirements-dev.txt
+pytest.ini
+README.md
+SECURITY.md
+LICENSE
+.gitignore
+.dockerignore

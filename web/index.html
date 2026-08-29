@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>FindMy Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="app.css" />
+<script src="app.js"></script>
+</head>
+<body>
+<div id="app">
+  <div id="map"></div>
+  <aside id="sidebar">
+    <div id="sidebar-header">
+      <button id="sheet-toggle" type="button" aria-label="Liste ein-/ausklappen"></button>
+      <div class="header-row">
+        <h1>FindMy Map</h1>
+        <button id="theme-toggle" class="icon-btn" type="button" aria-label="Design umschalten">☀</button>
+      </div>
+      <div id="status">Lade…</div>
+      <button id="refresh-btn" class="btn" type="button">Jetzt aktualisieren</button>
+      <a class="btn" href="timeline.html">Zeitachse →</a>
+    </div>
+    <ul id="device-list"></ul>
+  </aside>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map', { zoomControl: true }).setView([51.1657, 10.4515], 6);
+
+// Standard OpenStreetMap raster tiles (building outlines, paths, full
+// detail) -- darkened via the CSS filter on .leaflet-tile-pane above.
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+
+const deviceLayer = L.layerGroup().addTo(map);
+const markerById = new Map(); // device id -> current-position marker
+let hasFitBounds = false;
+let palette = [];         // pin colours offered in the editor (from the API)
+let lastDevices = [];     // most recent device list, for re-rendering without a fetch
+let editState = null;     // { id, name, color } while a device editor is open
+
+function fmtTime(unixSeconds) {
+  if (!unixSeconds) return 'unbekannt';
+  return new Date(unixSeconds * 1000).toLocaleString('de-DE');
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// Keep the auto-fit clear of the floating panel (top-right on desktop).
+function fitPadding() {
+  return window.matchMedia('(min-width: 641px)').matches
+    ? { paddingTopLeft: [60, 60], paddingBottomRight: [330, 60] }
+    : { padding: [50, 50] };
+}
+
+function renderStatus(state) {
+  const el = document.getElementById('status');
+  const parts = [];
+  parts.push(`Letzte Abfrage: ${state.last_poll ? fmtTime(state.last_poll) : 'noch keine'}`);
+  if (state.last_error) {
+    parts.push(`<span class="error-row">Fehler: ${escapeHtml(state.last_error)}</span>`);
+  }
+  const errored = (state.devices || []).filter(d => d.error);
+  if (errored.length) {
+    parts.push(`<span class="error-row">${errored.length} Gerät(e) ohne aktuellen Standort</span>`);
+  }
+  el.innerHTML = parts.join('<br>');
+}
+
+const ERROR_LABELS = {
+  no_response: 'keine Antwort',
+  fetch_failed: 'Abruf fehlgeschlagen',
+  decryption_failed: 'Entschlüsselung fehlgeschlagen',
+  no_location_data: 'keine Standortdaten',
+  no_location: 'kein Standort',
+};
+
+function popupHtml(device) {
+  return `
+    <b>${escapeHtml(device.name)}</b><br>
+    Zeit: ${fmtTime(device.time)}<br>
+    Genauigkeit: ${Math.round(device.accuracy || 0)} m<br>
+    Status: ${escapeHtml(device.status || '–')}<br>
+    Eigener Report: ${device.is_own_report ? 'ja' : 'nein'}
+  `;
+}
+
+function drawDevice(device) {
+  const color = device.color || '#4e9bff';
+  const track = (device.history || []).filter(p => p.latitude != null && p.longitude != null);
+  const latlngs = track.map(p => [p.latitude, p.longitude]);
+
+  // Connecting line through the last few fixes.
+  if (latlngs.length >= 2) {
+    L.polyline(latlngs, { color, weight: 3, opacity: 0.6, dashArray: '4 6' })
+      .addTo(deviceLayer);
+  }
+  // Small dots for the older points in the track.
+  track.slice(0, -1).forEach(p => {
+    L.circleMarker([p.latitude, p.longitude], {
+      radius: 3, color, weight: 1, fillColor: color, fillOpacity: 0.5,
+    }).addTo(deviceLayer).bindPopup(`${escapeHtml(device.name)}<br>${fmtTime(p.time)}`);
+  });
+
+  const points = latlngs.slice();
+
+  if (device.type === 'geo') {
+    const latlng = [device.latitude, device.longitude];
+    const marker = L.circleMarker(latlng, {
+      radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1,
+    }).addTo(deviceLayer).bindPopup(popupHtml(device));
+    markerById.set(device.id, marker);
+    points.push(latlng);
+  }
+
+  return points;
+}
+
+function focusDevice(id) {
+  const marker = markerById.get(id);
+  if (!marker) return;
+  map.flyTo(marker.getLatLng(), Math.max(map.getZoom(), 15));
+  marker.openPopup();
+  if (window.matchMedia('(max-width: 640px)').matches) {
+    document.getElementById('sidebar').classList.add('collapsed');
+  }
+}
+
+function mkBtn(label, className, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = className;
+  b.textContent = label;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+async function putDeviceSettings(id, name, color) {
+  const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, color }),
+  });
+  if (!res.ok) throw new Error('save failed');
+}
+
+function buildEditor(device) {
+  const box = document.createElement('div');
+  box.className = 'device-editor';
+  box.addEventListener('click', e => e.stopPropagation());
+
+  const nameField = document.createElement('div');
+  nameField.className = 'field';
+  nameField.innerHTML = '<label>Name</label>';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = editState.name;
+  input.placeholder = device.default_name || '';
+  input.addEventListener('input', () => { editState.name = input.value; });
+  nameField.appendChild(input);
+
+  const colorField = document.createElement('div');
+  colorField.className = 'field';
+  colorField.innerHTML = '<label>Pin-Farbe</label>';
+  const swatches = document.createElement('div');
+  swatches.className = 'swatches';
+  for (const c of palette) {
+    const sw = document.createElement('button');
+    sw.type = 'button';
+    sw.className = 'swatch';
+    sw.style.background = c;
+    sw.title = c;
+    if (c.toLowerCase() === (editState.color || '').toLowerCase()) sw.classList.add('selected');
+    sw.addEventListener('click', () => {
+      editState.color = c;
+      editState.colorCustom = true;
+      swatches.querySelectorAll('.swatch').forEach(s => s.classList.toggle('selected', s === sw));
+    });
+    swatches.appendChild(sw);
+  }
+  colorField.appendChild(swatches);
+
+  const actions = document.createElement('div');
+  actions.className = 'editor-actions';
+  actions.append(
+    mkBtn('Speichern', 'btn btn-primary btn-small', async () => {
+      const name = (editState.name || '').trim();
+      await putDeviceSettings(
+        device.id,
+        name === (device.default_name || '') ? '' : name,
+        editState.colorCustom ? (editState.color || '') : '',
+      );
+      editState = null;
+      await refresh();
+    }),
+    mkBtn('Abbrechen', 'btn btn-small', () => { editState = null; renderList(lastDevices); }),
+    mkBtn('Standard', 'btn btn-small', async () => {
+      await putDeviceSettings(device.id, '', '');
+      editState = null;
+      await refresh();
+    }),
+  );
+
+  box.append(nameField, colorField, actions);
+  return box;
+}
+
+function renderList(devices) {
+  const list = document.getElementById('device-list');
+  list.innerHTML = '';
+
+  const sorted = devices.slice().sort(
+    (a, b) => (b.last_location_time || 0) - (a.last_location_time || 0)
+  );
+
+  for (const device of sorted) {
+    const li = document.createElement('li');
+
+    const row = document.createElement('div');
+    row.className = 'device';
+    const when = escapeHtml(device.last_location_time
+      ? fmtTime(device.last_location_time)
+      : (ERROR_LABELS[device.error] || device.error || 'kein Standort'));
+    row.innerHTML = `
+      <span class="dot" style="background:${device.color || '#4e9bff'}"></span>
+      <span class="meta">
+        <span class="name">${escapeHtml(device.name)}</span>
+        <span class="time${device.last_location_time ? '' : ' error-row'}">${when}</span>
+      </span>
+      <button class="device-edit-btn" type="button" title="Bearbeiten" aria-label="Bearbeiten">&#9998;</button>
+    `;
+    row.addEventListener('click', () => focusDevice(device.id));
+    row.querySelector('.device-edit-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      editState = (editState && editState.id === device.id)
+        ? null
+        : {
+            id: device.id,
+            name: device.name || '',
+            color: device.color || '',
+            colorCustom: !!device.color_is_custom,
+          };
+      renderList(lastDevices);
+    });
+    li.appendChild(row);
+
+    if (editState && editState.id === device.id) {
+      li.appendChild(buildEditor(device));
+    }
+    list.appendChild(li);
+  }
+}
+
+async function refresh() {
+  let state;
+  try {
+    const res = await fetch('/api/locations');
+    state = await res.json();
+  } catch (err) {
+    document.getElementById('status').innerHTML =
+      `<span class="error-row">Server nicht erreichbar</span>`;
+    return;
+  }
+
+  renderStatus(state);
+
+  palette = state.palette || [];
+  const devices = state.devices || [];
+  lastDevices = devices;
+  deviceLayer.clearLayers();
+  markerById.clear();
+
+  const allPoints = [];
+  for (const device of devices) {
+    for (const p of drawDevice(device)) allPoints.push(p);
+  }
+
+  // Don't rebuild the list while a device editor is open -- it would
+  // discard the half-typed name and the input focus.
+  if (!editState) renderList(devices);
+
+  if (!hasFitBounds && allPoints.length) {
+    map.fitBounds(allPoints, { ...fitPadding(), maxZoom: 15 });
+    hasFitBounds = true;
+  }
+}
+
+const refreshBtn = document.getElementById('refresh-btn');
+refreshBtn.addEventListener('click', async () => {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = 'Aktualisiere…';
+  try {
+    await fetch('/api/refresh', { method: 'POST' });
+    await new Promise(r => setTimeout(r, 2500));
+    await refresh();
+  } finally {
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = 'Jetzt aktualisieren';
+  }
+});
+
+document.getElementById('sheet-toggle').addEventListener('click', () => {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.classList.toggle('collapsed');
+  setTimeout(() => map.invalidateSize(), 300);
+});
+
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>

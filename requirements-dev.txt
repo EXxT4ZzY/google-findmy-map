@@ -1,0 +1,7 @@
+# Dependencies for running the test suite. The tests stub out the vendored
+# GoogleFindMyTools library, so the heavy runtime deps in requirements.txt
+# (selenium, undetected-chromedriver, gpsoauth, ...) are not needed here.
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+httpx>=0.28.0
+pytest>=8.0

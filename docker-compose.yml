@@ -1,0 +1,53 @@
+# Configure via a .env file next to this one -- see .env.example.
+#
+# This service has NO authentication. It is attached only to an external
+# reverse-proxy network and publishes no ports. The proxy MUST enforce
+# authentication. See SECURITY.md.
+
+services:
+  # One-shot init: make the bind-mounted data directory writable by the
+  # unprivileged UID the main container runs as, so you don't have to chown
+  # it on the host by hand. Runs as root on every `up`, fixes /data, exits.
+  findmy-map-init:
+    image: alpine:3
+    command: sh -c 'chown -R ${PUID:-1000}:${PGID:-1000} /data'
+    volumes:
+      - ${GFM_DATA_DIR:-./data}:/data
+
+  findmy-map:
+    build: .
+    container_name: findmy-map
+    restart: unless-stopped
+    depends_on:
+      findmy-map-init:
+        condition: service_completed_successfully
+    networks:
+      - proxy-net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - GFM_POLL_INTERVAL_SECONDS=${GFM_POLL_INTERVAL_SECONDS:-120}
+      - GFM_NOMINATIM_URL=${GFM_NOMINATIM_URL:-https://nominatim.openstreetmap.org}
+      - GFM_GEOCODE_EMAIL=${GFM_GEOCODE_EMAIL:-}
+      - GFM_VISIT_RADIUS_M=${GFM_VISIT_RADIUS_M:-100}
+      - GFM_VISIT_MIN_MINUTES=${GFM_VISIT_MIN_MINUTES:-15}
+      - GFM_DEVICE_COLORS=${GFM_DEVICE_COLORS:-}
+    volumes:
+      # SQLite database (history.db) -- persisted on the host so it survives
+      # rebuilds. Treat it as sensitive personal data.
+      - ${GFM_DATA_DIR:-./data}:/data
+      # The single shared secrets.json from your existing GoogleFindMyTools
+      # container's data volume -- the SAME file (not a copy), so login
+      # tokens stay in sync between both containers. Only this one file is
+      # mounted; the rest of the vendored Auth/ package comes from the git
+      # clone in the Dockerfile and must NOT be overlaid.
+      - ${GFM_SECRETS_FILE}:/app/vendor/Auth/secrets.json:rw
+    # Must match the owner of GFM_SECRETS_FILE, or the token file can't be
+    # read/refreshed:  stat -c '%u:%g' "$GFM_SECRETS_FILE"
+    user: "${PUID:-1000}:${PGID:-1000}"
+    # No "ports:" on purpose -- reachable only from the reverse proxy on
+    # proxy-net, at container port 8080 (see README).
+
+networks:
+  proxy-net:
+    name: ${PROXY_NETWORK:-proxy-net}
+    external: true

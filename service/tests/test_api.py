@@ -1,0 +1,182 @@
+"""End-to-end checks for the HTTP API, with the heavy vendored
+``locations`` module stubbed out."""
+
+import sys
+import types
+
+import pytest
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    stub = types.ModuleType("locations")
+    stub.poll_all_devices = lambda: []
+    monkeypatch.setitem(sys.modules, "locations", stub)
+    monkeypatch.setenv("GFM_HISTORY_DB", str(tmp_path / "history.db"))
+    monkeypatch.setenv("GFM_HISTORY_FILE", str(tmp_path / "history.json"))
+    monkeypatch.setenv("GFM_WEB_DIR", str(tmp_path))
+    monkeypatch.setenv("GFM_NOMINATIM_URL", "")  # no network in tests
+    (tmp_path / "index.html").write_text("<html></html>")
+
+    for mod in ("main", "augment", "store", "colors", "visits", "geocode"):
+        monkeypatch.delitem(sys.modules, mod, raising=False)
+    import main
+
+    from fastapi.testclient import TestClient
+
+    with TestClient(main.app) as c:
+        c._main = main
+        yield c
+
+
+def test_history_endpoint_returns_points_in_the_window(client):
+    store = client._main._store
+    for ts in (1_000, 2_000, 3_000, 4_000):
+        store.add("dev-x", {"latitude": 52.5, "longitude": 13.4, "time": ts, "accuracy": 5})
+
+    resp = client.get("/api/history", params={"device": "dev-x", "start": 2_000, "end": 3_000})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["device"] == "dev-x"
+    assert [p["time"] for p in body["points"]] == [2_000, 3_000]
+
+
+def test_history_endpoint_defaults_to_the_last_seven_days(client):
+    import time
+
+    store = client._main._store
+    now = int(time.time())
+    store.add("dev-x", {"latitude": 1, "longitude": 2, "time": now - 3_600, "accuracy": 5})
+    store.add("dev-x", {"latitude": 1, "longitude": 2, "time": now - 30 * 24 * 3600, "accuracy": 5})
+
+    body = client.get("/api/history", params={"device": "dev-x"}).json()
+
+    assert [p["time"] for p in body["points"]] == [now - 3_600]
+
+
+def test_history_endpoint_unknown_device_returns_empty(client):
+    body = client.get("/api/history", params={"device": "nope"}).json()
+    assert body["points"] == [] and body["name"] is None
+
+
+def test_locations_endpoint_still_responds(client):
+    resp = client.get("/api/locations")
+    assert resp.status_code == 200
+    assert "devices" in resp.json()
+
+
+def test_locations_endpoint_exposes_the_palette(client):
+    body = client.get("/api/locations").json()
+    assert isinstance(body["palette"], list) and body["palette"]
+
+
+def _seed_one_device(main, name="iPhone", id="dev-1"):
+    with main._state_lock:
+        main._state["devices"] = main._augment_all([{
+            "name": name, "id": id, "type": "geo",
+            "latitude": 52.5, "longitude": 13.4, "time": 1000, "accuracy": 5,
+        }])
+
+
+def _device(client, id="dev-1"):
+    return next(d for d in client.get("/api/locations").json()["devices"] if d["id"] == id)
+
+
+def test_update_device_sets_name_and_colour(client):
+    _seed_one_device(client._main)
+
+    resp = client.put("/api/devices/dev-1", json={"name": "Rucksack", "color": "#123456"})
+    assert resp.status_code == 200
+
+    dev = _device(client)
+    assert dev["name"] == "Rucksack"
+    assert dev["color"] == "#123456"
+    assert dev["default_name"] == "iPhone"
+
+
+def test_update_device_persists_to_the_store(client):
+    client.put("/api/devices/dev-9", json={"name": "X", "color": "#abcdef"})
+    assert client._main._store.get_settings()["dev-9"] == {"name": "X", "color": "#abcdef"}
+
+
+def test_clearing_settings_restores_the_defaults(client):
+    _seed_one_device(client._main)
+    client.put("/api/devices/dev-1", json={"name": "Rucksack", "color": "#123456"})
+    client.put("/api/devices/dev-1", json={"name": "", "color": ""})
+
+    dev = _device(client)
+    assert dev["name"] == "iPhone"
+    assert dev["color"] != "#123456"
+
+
+def test_update_device_rejects_a_non_hex_colour(client):
+    resp = client.put("/api/devices/dev-1", json={"name": "X", "color": "red"})
+    assert resp.status_code == 422
+
+
+def test_mutating_endpoints_reject_cross_site_requests(client):
+    assert client.post("/api/refresh", headers={"sec-fetch-site": "cross-site"}).status_code == 403
+    assert client.put("/api/devices/d", json={"name": "x"},
+                      headers={"sec-fetch-site": "same-site"}).status_code == 403
+
+
+def test_mutating_endpoints_allow_same_origin_and_non_browser(client):
+    assert client.post("/api/refresh", headers={"sec-fetch-site": "same-origin"}).status_code == 200
+    assert client.post("/api/refresh").status_code == 200  # no header (curl/scripts)
+
+
+def test_read_endpoints_are_not_blocked_cross_site(client):
+    assert client.get("/api/locations", headers={"sec-fetch-site": "cross-site"}).status_code == 200
+
+
+def _seed_stay(store, device="dev-1", lat=52.52, lon=13.405, start=1_000_000, count=16):
+    for i in range(count):
+        store.add(device, {"latitude": lat + (i % 3) * 1e-5, "longitude": lon,
+                           "time": start + i * 120, "accuracy": 10})
+
+
+def test_visits_endpoint_detects_a_stay(client):
+    _seed_stay(client._main._store)
+    body = client.get("/api/visits", params={"device": "dev-1",
+                                             "start": 999_000, "end": 1_100_000}).json()
+    assert body["geocoding"] is False
+    assert len(body["visits"]) == 1
+    v = body["visits"][0]
+    assert v["start"] == 1_000_000 and v["end"] == 1_000_000 + 15 * 120
+    assert v["label"] is None
+
+
+def test_visits_endpoint_surfaces_cached_addresses(client):
+    main = client._main
+    _seed_stay(main._store)
+    found = __import__("visits").detect_visits(
+        main._store.range("dev-1", 0, 2_000_000), main.VISIT_RADIUS_M, main.VISIT_MIN_SECONDS
+    )
+    main._store.geocode_put(found[0]["lat"], found[0]["lon"], "Zuhause", "Zuhause, Berlin")
+
+    body = client.get("/api/visits", params={"device": "dev-1",
+                                             "start": 0, "end": 2_000_000}).json()
+    assert body["visits"][0]["label"] == "Zuhause"
+    assert body["visits"][0]["address"] == "Zuhause, Berlin"
+
+
+def test_visits_endpoint_queues_uncached_coords_when_geocoding_is_on(client):
+    from geocode import Geocoder
+
+    main = client._main
+    main._geocoder = Geocoder(main._store, base_url="https://example.test",
+                              http_get=lambda url: {"display_name": "Ort, Stadt", "address": {}})
+    _seed_stay(main._store)
+
+    body = client.get("/api/visits", params={"device": "dev-1",
+                                             "start": 0, "end": 2_000_000}).json()
+    assert body["geocoding"] is True
+    assert body["pending"] == 1
+    assert main._geocoder.pending_count == 1
+
+    main._geocoder._drain_one()
+    body2 = client.get("/api/visits", params={"device": "dev-1",
+                                              "start": 0, "end": 2_000_000}).json()
+    assert body2["visits"][0]["label"] == "Ort"
+    assert body2["pending"] == 0
