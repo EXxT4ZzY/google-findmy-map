@@ -22,3 +22,6 @@ secrets.json
 *.swp
 .idea/
 .vscode/
+
+# internal marketing note, kept locally only
+docs/reddit-post.md
