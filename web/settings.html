@@ -95,7 +95,7 @@
 
   function renderAuth() {
     const on = state.auth_enabled;
-    fields.hidden = !box.checked;
+    fields.hidden = !(box.checked || on);
     curField.hidden = !on;
     newLabel.textContent = on ? t('f_new_password_optional') : t('f_new_password');
     logoutBtn.hidden = !on;
