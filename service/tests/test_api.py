@@ -246,3 +246,74 @@ class TestAuthGate:
         with c2:
             c2.cookies.clear()
             assert c2.get("/api/locations").status_code == 200
+
+
+_NEEDS_TASK6 = pytest.mark.xfail(
+    reason="needs PUT /api/settings/auth from Task 6", strict=False
+)
+
+
+class TestAuthEndpoints:
+    def test_status_reports_disabled(self, client):
+        body = client.get("/api/auth/status").json()
+        assert body == {"auth_enabled": False, "authenticated": False}
+
+    @_NEEDS_TASK6
+    def test_status_reports_enabled_and_authenticated(self, client):
+        _enable_auth(client)
+        body = client.get("/api/auth/status").json()
+        assert body["auth_enabled"] is True and body["authenticated"] is True
+        client.cookies.clear()
+        body2 = client.get("/api/auth/status").json()
+        assert body2["auth_enabled"] is True and body2["authenticated"] is False
+
+    @_NEEDS_TASK6
+    def test_login_wrong_then_right(self, client):
+        _enable_auth(client, "hunter2222")
+        client.cookies.clear()
+        assert _login(client, "nope").status_code == 401
+        r = _login(client, "hunter2222")
+        assert r.status_code == 200
+        assert client.get("/api/locations").status_code == 200
+
+    def test_login_when_disabled_is_400(self, client):
+        assert _login(client, "whatever").status_code == 400
+
+    @_NEEDS_TASK6
+    def test_login_throttles_after_free_attempts(self, client):
+        _enable_auth(client)
+        client.cookies.clear()
+        for _ in range(5):
+            assert _login(client, "wrong").status_code == 401
+        r = _login(client, "wrong")
+        assert r.status_code == 429
+        assert r.json()["retry_after"] > 0
+        assert r.headers["retry-after"]
+
+    @_NEEDS_TASK6
+    def test_logout_clears_the_cookie(self, client):
+        _enable_auth(client)
+        r = client.post("/api/auth/logout")
+        assert r.status_code == 200
+        set_cookie = r.headers.get("set-cookie", "").lower()
+        assert "fmm_session=" in set_cookie
+        assert 'max-age=0' in set_cookie or '01 jan 1970' in set_cookie
+
+    @_NEEDS_TASK6
+    def test_secure_flag_follows_forwarded_proto(self, client):
+        _enable_auth(client)
+        client.cookies.clear()
+        r = _login(client, "secret123")
+        assert "secure" not in r.headers["set-cookie"].lower()
+        client.cookies.clear()
+        r2 = client.post("/api/auth/login", json={"password": "secret123"},
+                         headers={"x-forwarded-proto": "https"})
+        assert "secure" in r2.headers["set-cookie"].lower()
+
+    @_NEEDS_TASK6
+    def test_login_blocks_cross_site(self, client):
+        _enable_auth(client)
+        client.cookies.clear()
+        r = client.post("/api/auth/login", json={"password": "secret123"},
+                        headers={"sec-fetch-site": "cross-site"})
+        assert r.status_code == 403

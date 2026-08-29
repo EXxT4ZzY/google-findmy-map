@@ -201,6 +201,10 @@ class DeviceSettingsBody(BaseModel):
     color: str | None = None
 
 
+class LoginBody(BaseModel):
+    password: str = ""
+
+
 @app.put("/api/devices/{device_id}", dependencies=[Depends(block_cross_site)])
 def update_device(device_id: str, body: DeviceSettingsBody):
     """Set (or clear, with empty values) a device's display name and pin colour."""
@@ -272,6 +276,44 @@ def get_visits(device: str, start: int | None = None, end: int | None = None):
         "pending": pending,
         "visits": out,
     }
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    cfg = _store.get_config_many(["auth_enabled", "cred_version"])
+    enabled = not AUTH_DISABLED and cfg.get("auth_enabled") == "1"
+    return {
+        "auth_enabled": enabled,
+        "authenticated": enabled and _token_ok(request, cfg),
+    }
+
+
+@app.post("/api/auth/login", dependencies=[Depends(block_cross_site)])
+async def auth_login(body: LoginBody, request: Request, response: Response):
+    ip = _client_ip(request)
+    wait = _login_throttle.retry_after(ip)
+    if wait > 0:
+        return JSONResponse(
+            {"detail": "too many attempts", "retry_after": wait},
+            status_code=429, headers={"Retry-After": str(wait)},
+        )
+    if LOGIN_DELAY_SECONDS:
+        await asyncio.sleep(LOGIN_DELAY_SECONDS)
+    cfg = _store.get_config_many(["auth_enabled", "password"])
+    if cfg.get("auth_enabled") != "1":
+        raise HTTPException(status_code=400, detail="authentication is disabled")
+    if not auth.verify_password(body.password, cfg.get("password") or ""):
+        _login_throttle.record_failure(ip)
+        raise HTTPException(status_code=401, detail="wrong password")
+    _login_throttle.record_success(ip)
+    _set_session_cookie(response, request)
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response):
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
