@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<title>FindMy Map – Zeitachse</title>
+<title data-i18n="page_title_timeline">FindMy Map – Timeline</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="app.css" />
@@ -13,30 +13,31 @@
   <div id="map"></div>
   <aside id="sidebar">
     <div id="sidebar-header">
-      <button id="sheet-toggle" type="button" aria-label="Panel ein-/ausklappen"></button>
+      <button id="sheet-toggle" type="button" data-i18n-aria="toggle_sheet" aria-label="Collapse / expand panel"></button>
       <div class="header-row">
-        <h1>Zeitachse</h1>
-        <button id="theme-toggle" class="icon-btn" type="button" aria-label="Design umschalten">☀</button>
+        <h1 data-i18n="timeline_heading">Timeline</h1>
+        <button id="lang-toggle" class="icon-btn" type="button" aria-label="Switch language">EN</button>
+        <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle theme">☀</button>
       </div>
-      <a class="btn" href="index.html">← Zurück zur Karte</a>
+      <a class="btn" href="index.html" data-i18n="back_to_map">← Back to map</a>
     </div>
     <div class="sidebar-body">
       <div class="field">
-        <label for="device">Gerät</label>
+        <label for="device" data-i18n="f_device">Device</label>
         <select id="device"></select>
       </div>
       <div class="field">
-        <label for="from">Von</label>
+        <label for="from" data-i18n="f_from">From</label>
         <input type="date" id="from">
       </div>
       <div class="field">
-        <label for="to">Bis</label>
+        <label for="to" data-i18n="f_to">To</label>
         <input type="date" id="to">
       </div>
-      <button id="show-btn" class="btn btn-primary" type="button">Anzeigen</button>
+      <button id="show-btn" class="btn btn-primary" type="button" data-i18n="show">Show</button>
       <div id="status" class="muted" style="margin-top: 12px;"></div>
       <div id="visits" class="visits" hidden>
-        <h2>Besuchte Orte</h2>
+        <h2 data-i18n="visited_places">Visited places</h2>
         <div id="visits-note" class="visits-note"></div>
         <div id="visits-list"></div>
       </div>
@@ -57,25 +58,28 @@ const visitLayer = L.layerGroup().addTo(map);
 const deviceColors = new Map();
 let visitsRun = 0;   // bumped on each show() so stale geocode retries stop
 
+const t = (k, v) => window.FindMyMap.t(k, v);
+const loc = () => window.FindMyMap.locale();
+
 function fmtTime(unixSeconds) {
-  if (!unixSeconds) return 'unbekannt';
-  return new Date(unixSeconds * 1000).toLocaleString('de-DE');
+  if (!unixSeconds) return t('unknown');
+  return new Date(unixSeconds * 1000).toLocaleString(loc());
 }
 
 function fmtClock(ts) {
-  return new Date(ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  return new Date(ts * 1000).toLocaleTimeString(loc(), { hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtDay(ts) {
-  return new Date(ts * 1000).toLocaleDateString('de-DE',
+  return new Date(ts * 1000).toLocaleDateString(loc(),
     { weekday: 'short', day: '2-digit', month: '2-digit' });
 }
 
 function fmtDuration(seconds) {
   const m = Math.round(seconds / 60);
-  if (m < 60) return `${m} Min`;
+  if (m < 60) return `${m} ${t('unit_min')}`;
   const h = Math.floor(m / 60);
-  return m % 60 ? `${h} Std ${m % 60} Min` : `${h} Std`;
+  return m % 60 ? `${h} ${t('unit_hour')} ${m % 60} ${t('unit_min')}` : `${h} ${t('unit_hour')}`;
 }
 
 function escapeHtml(s) {
@@ -115,7 +119,7 @@ async function loadDevices() {
   try {
     state = await (await fetch('/api/locations')).json();
   } catch (e) {
-    setStatus('<span class="error-row">Server nicht erreichbar.</span>');
+    setStatus(`<span class="error-row">${t('server_unreachable')}</span>`);
     return;
   }
   const devices = (state.devices || []).slice()
@@ -127,7 +131,7 @@ async function loadDevices() {
     opt.textContent = d.name || d.id;
     sel.appendChild(opt);
   }
-  if (!devices.length) setStatus('Keine Geräte gefunden.');
+  if (!devices.length) setStatus(t('no_devices'));
 }
 
 function selectedRange() {
@@ -144,17 +148,17 @@ async function show() {
   const { start, end } = selectedRange();
   const btn = document.getElementById('show-btn');
   btn.disabled = true;
-  btn.textContent = 'Lädt…';
+  btn.textContent = t('loading_short');
   const run = ++visitsRun;
   try {
     const url = `/api/history?device=${encodeURIComponent(id)}&start=${start}&end=${end}`;
     const hasTrack = render(await (await fetch(url)).json());
     if (hasTrack) loadVisits(id, start, end, run, 0);
   } catch (e) {
-    setStatus('<span class="error-row">Fehler beim Laden des Verlaufs.</span>');
+    setStatus(`<span class="error-row">${t('history_load_error')}</span>`);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Anzeigen';
+    btn.textContent = t('show');
   }
 }
 
@@ -187,12 +191,13 @@ function renderVisits(data) {
   list.innerHTML = '';
 
   const note = document.getElementById('visits-note');
-  note.textContent = data.geocoding ? '' : 'Adressen deaktiviert (GFM_NOMINATIM_URL leer).';
+  note.textContent = data.geocoding ? '' : t('geocoding_disabled');
 
   if (!visits.length) {
-    list.innerHTML = '<p class="visits-empty">Keine Aufenthalte (mind. 15 Min am '
-      + 'selben Ort) im gewählten Zeitraum. Sobald sich mehr Standortdaten angesammelt '
-      + 'haben, erscheinen hier die besuchten Orte.</p>';
+    const p = document.createElement('p');
+    p.className = 'visits-empty';
+    p.textContent = t('no_visits');
+    list.appendChild(p);
     return;
   }
 
@@ -212,7 +217,7 @@ function renderVisits(data) {
       <span class="visit-num">${n}</span>
       <span class="visit-body">
         <span class="visit-place${pending ? ' pending' : ''}">${
-          pending ? 'Adresse wird ermittelt…' : escapeHtml(place)}</span>
+          pending ? t('resolving_address') : escapeHtml(place)}</span>
         <span class="visit-when">${when} · ${fmtDuration(v.end - v.start)}</span>
       </span>`;
 
@@ -240,7 +245,7 @@ function render(data) {
   const pts = (data.points || []).filter(p => p.latitude != null && p.longitude != null);
 
   if (!pts.length) {
-    setStatus('Keine Standorte im gewählten Zeitraum.');
+    setStatus(escapeHtml(t('no_points_in_range')));
     document.getElementById('visits').hidden = true;
     return false;
   }
@@ -252,9 +257,9 @@ function render(data) {
 
   // Start and end, emphasised.
   L.circleMarker(latlngs[0], { radius: 7, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 })
-    .addTo(layer).bindPopup(`<b>Start</b><br>${fmtTime(pts[0].time)}`);
+    .addTo(layer).bindPopup(`<b>${t('start')}</b><br>${fmtTime(pts[0].time)}`);
   L.circleMarker(latlngs[latlngs.length - 1], { radius: 7, color: '#fff', weight: 2, fillColor: '#fff', fillOpacity: 1 })
-    .addTo(layer).bindPopup(`<b>Ende</b><br>${fmtTime(pts[pts.length - 1].time)}`);
+    .addTo(layer).bindPopup(`<b>${t('end')}</b><br>${fmtTime(pts[pts.length - 1].time)}`);
 
   // Intermediate points: skip any within 30 m of the last drawn one so
   // stationary stretches don't bury the map in dots (the line stays whole).
@@ -267,7 +272,7 @@ function render(data) {
   }
 
   map.fitBounds(latlngs, { ...fitPadding(), maxZoom: 16 });
-  setStatus(`${pts.length} Standorte<br>${fmtTime(pts[0].time)} – ${fmtTime(pts[pts.length - 1].time)}`);
+  setStatus(`${t('locations_count', { n: pts.length })}<br>${fmtTime(pts[0].time)} – ${fmtTime(pts[pts.length - 1].time)}`);
   return true;
 }
 
@@ -280,6 +285,11 @@ document.getElementById('sheet-toggle').addEventListener('click', () => {
   document.getElementById('sidebar').classList.toggle('collapsed');
   setTimeout(() => map.invalidateSize(), 300);
 });
+
+// Re-render the current view when the language changes (labels come via t()).
+window.FindMyMap.onLangChange = () => {
+  if (document.getElementById('device').value) show();
+};
 
 loadDevices().then(show);
 </script>

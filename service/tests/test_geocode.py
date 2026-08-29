@@ -14,7 +14,7 @@ def store(tmp_path):
 class TestFormatLabel:
     def test_named_poi_is_used_as_the_head(self):
         data = {
-            "display_name": "Zoo Berlin, Hardenbergplatz, Berlin, 10787, Deutschland",
+            "display_name": "Zoo Berlin, Hardenbergplatz, Berlin, 10787, Germany",
             "name": "Zoo Berlin",
             "address": {"tourism": "Zoo Berlin", "suburb": "Charlottenburg"},
         }
@@ -24,17 +24,17 @@ class TestFormatLabel:
 
     def test_road_and_house_number(self):
         data = {
-            "display_name": "12, Beispielstraße, Mitte, Berlin",
-            "address": {"road": "Beispielstraße", "house_number": "12", "suburb": "Mitte"},
+            "display_name": "12, Example Street, Downtown, Berlin",
+            "address": {"road": "Example Street", "house_number": "12", "suburb": "Downtown"},
         }
         label, _ = format_label(data)
-        assert label == "Beispielstraße 12, Mitte"
+        assert label == "Example Street 12, Downtown"
 
     def test_falls_back_to_display_name(self):
-        data = {"display_name": "Irgendwo, Nirgendwo", "address": {}}
+        data = {"display_name": "Somewhere, Nowhere", "address": {}}
         label, address = format_label(data)
-        assert label == "Irgendwo"
-        assert address == "Irgendwo, Nirgendwo"
+        assert label == "Somewhere"
+        assert address == "Somewhere, Nowhere"
 
     def test_empty_input(self):
         assert format_label({}) == (None, None)
@@ -48,18 +48,18 @@ class TestGeocoder:
         g.enqueue(52.5, 13.4)  # no-op, must not raise
 
     def test_lookup_delegates_to_the_store_cache(self, store):
-        store.geocode_put(52.5, 13.4, "Da", "Da, Stadt")
+        store.geocode_put(52.5, 13.4, "X", "X, City")
         g = Geocoder(store, base_url="https://example.test")
         got = g.lookup(52.5, 13.4)
-        assert got["label"] == "Da" and got["address"] == "Da, Stadt"
+        assert got["label"] == "X" and got["address"] == "X, City"
 
     def test_process_one_fetches_and_caches(self, store):
         calls = []
 
         def fake_get(url):
             calls.append(url)
-            return {"display_name": "Platz 1, Bezirk, Stadt",
-                    "address": {"road": "Platz", "house_number": "1", "suburb": "Bezirk"}}
+            return {"display_name": "Square 1, District, City",
+                    "address": {"road": "Square", "house_number": "1", "suburb": "District"}}
 
         g = Geocoder(store, base_url="https://example.test", http_get=fake_get)
         assert g.enqueue(52.5211, 13.4066) is True
@@ -67,11 +67,11 @@ class TestGeocoder:
 
         assert len(calls) == 1 and "lat=52.5211" in calls[0]
         got = g.lookup(52.5211, 13.4066)
-        assert got["label"] == "Platz 1, Bezirk"
-        assert got["address"] == "Platz 1, Bezirk, Stadt"
+        assert got["label"] == "Square 1, District"
+        assert got["address"] == "Square 1, District, City"
 
     def test_enqueue_skips_already_cached_coordinates(self, store):
-        store.geocode_put(52.5, 13.4, "Da", "Da")
+        store.geocode_put(52.5, 13.4, "Here", "Here")
         g = Geocoder(store, base_url="https://example.test")
         assert g.enqueue(52.5, 13.4) is False
         assert g.pending_count == 0

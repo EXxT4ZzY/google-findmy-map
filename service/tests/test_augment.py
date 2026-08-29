@@ -70,9 +70,9 @@ class TestAugmentDevice:
 
 class TestDeviceSettingsOverrides:
     def test_custom_name_replaces_the_displayed_name(self, store):
-        settings = {"dev-1": {"name": "Rucksack", "color": None}}
+        settings = {"dev-1": {"name": "Backpack", "color": None}}
         result = augment_device(geo_device(name="iPhone"), store, {}, settings=settings)
-        assert result["name"] == "Rucksack"
+        assert result["name"] == "Backpack"
         assert result["default_name"] == "iPhone"
 
     def test_custom_colour_wins_over_env_and_palette(self, store):
@@ -89,14 +89,14 @@ class TestDeviceSettingsOverrides:
         assert result["color"] == PALETTE[3]
 
     def test_flags_report_which_overrides_are_active(self, store):
-        settings = {"dev-1": {"name": "Rucksack", "color": None}}
+        settings = {"dev-1": {"name": "Backpack", "color": None}}
         result = augment_device(geo_device(), store, {}, settings=settings)
         assert result["name_is_custom"] is True
         assert result["color_is_custom"] is False
 
     def test_re_augmenting_keeps_the_original_default_name(self, store):
-        settings = {"dev-1": {"name": "Rucksack", "color": None}}
+        settings = {"dev-1": {"name": "Backpack", "color": None}}
         device = geo_device(name="iPhone")
         augment_device(device, store, {}, settings=settings)
         augment_device(device, store, {}, settings=settings)
-        assert device["default_name"] == "iPhone" and device["name"] == "Rucksack"
+        assert device["default_name"] == "iPhone" and device["name"] == "Backpack"

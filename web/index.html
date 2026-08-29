@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <title>FindMy Map</title>
@@ -13,14 +13,15 @@
   <div id="map"></div>
   <aside id="sidebar">
     <div id="sidebar-header">
-      <button id="sheet-toggle" type="button" aria-label="Liste ein-/ausklappen"></button>
+      <button id="sheet-toggle" type="button" data-i18n-aria="toggle_sheet" aria-label="Collapse / expand panel"></button>
       <div class="header-row">
         <h1>FindMy Map</h1>
-        <button id="theme-toggle" class="icon-btn" type="button" aria-label="Design umschalten">☀</button>
+        <button id="lang-toggle" class="icon-btn" type="button" aria-label="Switch language">EN</button>
+        <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle theme">☀</button>
       </div>
-      <div id="status">Lade…</div>
-      <button id="refresh-btn" class="btn" type="button">Jetzt aktualisieren</button>
-      <a class="btn" href="timeline.html">Zeitachse →</a>
+      <div id="status" data-i18n="loading">Loading…</div>
+      <button id="refresh-btn" class="btn" type="button" data-i18n="refresh">Refresh now</button>
+      <a class="btn" href="timeline.html" data-i18n="timeline_link">Timeline →</a>
     </div>
     <ul id="device-list"></ul>
   </aside>
@@ -44,9 +45,19 @@ let palette = [];         // pin colours offered in the editor (from the API)
 let lastDevices = [];     // most recent device list, for re-rendering without a fetch
 let editState = null;     // { id, name, color } while a device editor is open
 
+const t = (k, v) => window.FindMyMap.t(k, v);
+const loc = () => window.FindMyMap.locale();
+
 function fmtTime(unixSeconds) {
-  if (!unixSeconds) return 'unbekannt';
-  return new Date(unixSeconds * 1000).toLocaleString('de-DE');
+  if (!unixSeconds) return t('unknown');
+  return new Date(unixSeconds * 1000).toLocaleString(loc());
+}
+
+const ERROR_CODES = ['no_response', 'fetch_failed', 'decryption_failed',
+  'no_location_data', 'no_location'];
+function errorLabel(code) {
+  if (ERROR_CODES.includes(code)) return t('err_' + code);
+  return code || t('err_no_location');
 }
 
 function escapeHtml(s) {
@@ -65,32 +76,24 @@ function fitPadding() {
 function renderStatus(state) {
   const el = document.getElementById('status');
   const parts = [];
-  parts.push(`Letzte Abfrage: ${state.last_poll ? fmtTime(state.last_poll) : 'noch keine'}`);
+  parts.push(`${t('last_poll')}: ${state.last_poll ? fmtTime(state.last_poll) : t('never')}`);
   if (state.last_error) {
-    parts.push(`<span class="error-row">Fehler: ${escapeHtml(state.last_error)}</span>`);
+    parts.push(`<span class="error-row">${t('error')}: ${escapeHtml(state.last_error)}</span>`);
   }
   const errored = (state.devices || []).filter(d => d.error);
   if (errored.length) {
-    parts.push(`<span class="error-row">${errored.length} Gerät(e) ohne aktuellen Standort</span>`);
+    parts.push(`<span class="error-row">${t('devices_without_location', { n: errored.length })}</span>`);
   }
   el.innerHTML = parts.join('<br>');
 }
 
-const ERROR_LABELS = {
-  no_response: 'keine Antwort',
-  fetch_failed: 'Abruf fehlgeschlagen',
-  decryption_failed: 'Entschlüsselung fehlgeschlagen',
-  no_location_data: 'keine Standortdaten',
-  no_location: 'kein Standort',
-};
-
 function popupHtml(device) {
   return `
     <b>${escapeHtml(device.name)}</b><br>
-    Zeit: ${fmtTime(device.time)}<br>
-    Genauigkeit: ${Math.round(device.accuracy || 0)} m<br>
-    Status: ${escapeHtml(device.status || '–')}<br>
-    Eigener Report: ${device.is_own_report ? 'ja' : 'nein'}
+    ${t('p_time')}: ${fmtTime(device.time)}<br>
+    ${t('p_accuracy')}: ${Math.round(device.accuracy || 0)} m<br>
+    ${t('p_status')}: ${escapeHtml(device.status || '–')}<br>
+    ${t('p_own_report')}: ${device.is_own_report ? t('yes') : t('no')}
   `;
 }
 
@@ -160,7 +163,7 @@ function buildEditor(device) {
 
   const nameField = document.createElement('div');
   nameField.className = 'field';
-  nameField.innerHTML = '<label>Name</label>';
+  nameField.innerHTML = `<label>${t('f_name')}</label>`;
   const input = document.createElement('input');
   input.type = 'text';
   input.value = editState.name;
@@ -170,7 +173,7 @@ function buildEditor(device) {
 
   const colorField = document.createElement('div');
   colorField.className = 'field';
-  colorField.innerHTML = '<label>Pin-Farbe</label>';
+  colorField.innerHTML = `<label>${t('f_pin_color')}</label>`;
   const swatches = document.createElement('div');
   swatches.className = 'swatches';
   for (const c of palette) {
@@ -192,7 +195,7 @@ function buildEditor(device) {
   const actions = document.createElement('div');
   actions.className = 'editor-actions';
   actions.append(
-    mkBtn('Speichern', 'btn btn-primary btn-small', async () => {
+    mkBtn(t('save'), 'btn btn-primary btn-small', async () => {
       const name = (editState.name || '').trim();
       await putDeviceSettings(
         device.id,
@@ -202,8 +205,8 @@ function buildEditor(device) {
       editState = null;
       await refresh();
     }),
-    mkBtn('Abbrechen', 'btn btn-small', () => { editState = null; renderList(lastDevices); }),
-    mkBtn('Standard', 'btn btn-small', async () => {
+    mkBtn(t('cancel'), 'btn btn-small', () => { editState = null; renderList(lastDevices); }),
+    mkBtn(t('reset_default'), 'btn btn-small', async () => {
       await putDeviceSettings(device.id, '', '');
       editState = null;
       await refresh();
@@ -229,14 +232,14 @@ function renderList(devices) {
     row.className = 'device';
     const when = escapeHtml(device.last_location_time
       ? fmtTime(device.last_location_time)
-      : (ERROR_LABELS[device.error] || device.error || 'kein Standort'));
+      : errorLabel(device.error));
     row.innerHTML = `
       <span class="dot" style="background:${device.color || '#4e9bff'}"></span>
       <span class="meta">
         <span class="name">${escapeHtml(device.name)}</span>
         <span class="time${device.last_location_time ? '' : ' error-row'}">${when}</span>
       </span>
-      <button class="device-edit-btn" type="button" title="Bearbeiten" aria-label="Bearbeiten">&#9998;</button>
+      <button class="device-edit-btn" type="button" title="${t('edit')}" aria-label="${t('edit')}">&#9998;</button>
     `;
     row.addEventListener('click', () => focusDevice(device.id));
     row.querySelector('.device-edit-btn').addEventListener('click', e => {
@@ -267,7 +270,7 @@ async function refresh() {
     state = await res.json();
   } catch (err) {
     document.getElementById('status').innerHTML =
-      `<span class="error-row">Server nicht erreichbar</span>`;
+      `<span class="error-row">${t('server_unreachable')}</span>`;
     return;
   }
 
@@ -297,14 +300,14 @@ async function refresh() {
 const refreshBtn = document.getElementById('refresh-btn');
 refreshBtn.addEventListener('click', async () => {
   refreshBtn.disabled = true;
-  refreshBtn.textContent = 'Aktualisiere…';
+  refreshBtn.textContent = t('refreshing');
   try {
     await fetch('/api/refresh', { method: 'POST' });
     await new Promise(r => setTimeout(r, 2500));
     await refresh();
   } finally {
     refreshBtn.disabled = false;
-    refreshBtn.textContent = 'Jetzt aktualisieren';
+    refreshBtn.textContent = t('refresh');
   }
 });
 
@@ -313,6 +316,9 @@ document.getElementById('sheet-toggle').addEventListener('click', () => {
   sidebar.classList.toggle('collapsed');
   setTimeout(() => map.invalidateSize(), 300);
 });
+
+// Re-render everything (list, popups, status) when the language changes.
+window.FindMyMap.onLangChange = () => refresh();
 
 refresh();
 setInterval(refresh, 30000);

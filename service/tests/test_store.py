@@ -101,8 +101,8 @@ class TestDeviceSettings:
         assert store.get_settings() == {}
 
     def test_set_and_read_back_a_name_and_colour(self, store):
-        store.set_setting("dev", name="Auto", color="#ff0000")
-        assert store.get_settings() == {"dev": {"name": "Auto", "color": "#ff0000"}}
+        store.set_setting("dev", name="Car", color="#ff0000")
+        assert store.get_settings() == {"dev": {"name": "Car", "color": "#ff0000"}}
 
     def test_setting_is_upserted_not_duplicated(self, store):
         store.set_setting("dev", name="A", color="#111111")
@@ -117,10 +117,10 @@ class TestDeviceSettings:
     def test_settings_survive_reopen(self, tmp_path):
         path = tmp_path / "history.db"
         first = LocationStore(path)
-        first.set_setting("dev", name="Auto", color="#00ff00")
+        first.set_setting("dev", name="Car", color="#00ff00")
         first.close()
         second = LocationStore(path)
-        assert second.get_settings() == {"dev": {"name": "Auto", "color": "#00ff00"}}
+        assert second.get_settings() == {"dev": {"name": "Car", "color": "#00ff00"}}
         second.close()
 
 
@@ -129,10 +129,10 @@ class TestGeocodeCache:
         assert store.geocode_get(52.5, 13.4) is None
 
     def test_put_then_get_roundtrip(self, store):
-        store.geocode_put(52.52001, 13.40502, "Straße 1", "Straße 1, 10115 Berlin")
+        store.geocode_put(52.52001, 13.40502, "Main St 1", "Main St 1, 10115 Berlin")
         got = store.geocode_get(52.52001, 13.40502)
-        assert got["label"] == "Straße 1"
-        assert got["address"] == "Straße 1, 10115 Berlin"
+        assert got["label"] == "Main St 1"
+        assert got["address"] == "Main St 1, 10115 Berlin"
         assert isinstance(got["fetched_at"], int)
 
     def test_coordinates_are_rounded_so_nearby_lookups_hit(self, store):

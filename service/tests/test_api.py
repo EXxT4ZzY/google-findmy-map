@@ -86,11 +86,11 @@ def _device(client, id="dev-1"):
 def test_update_device_sets_name_and_colour(client):
     _seed_one_device(client._main)
 
-    resp = client.put("/api/devices/dev-1", json={"name": "Rucksack", "color": "#123456"})
+    resp = client.put("/api/devices/dev-1", json={"name": "Backpack", "color": "#123456"})
     assert resp.status_code == 200
 
     dev = _device(client)
-    assert dev["name"] == "Rucksack"
+    assert dev["name"] == "Backpack"
     assert dev["color"] == "#123456"
     assert dev["default_name"] == "iPhone"
 
@@ -102,7 +102,7 @@ def test_update_device_persists_to_the_store(client):
 
 def test_clearing_settings_restores_the_defaults(client):
     _seed_one_device(client._main)
-    client.put("/api/devices/dev-1", json={"name": "Rucksack", "color": "#123456"})
+    client.put("/api/devices/dev-1", json={"name": "Backpack", "color": "#123456"})
     client.put("/api/devices/dev-1", json={"name": "", "color": ""})
 
     dev = _device(client)
@@ -153,12 +153,12 @@ def test_visits_endpoint_surfaces_cached_addresses(client):
     found = __import__("visits").detect_visits(
         main._store.range("dev-1", 0, 2_000_000), main.VISIT_RADIUS_M, main.VISIT_MIN_SECONDS
     )
-    main._store.geocode_put(found[0]["lat"], found[0]["lon"], "Zuhause", "Zuhause, Berlin")
+    main._store.geocode_put(found[0]["lat"], found[0]["lon"], "Home", "Home, Berlin")
 
     body = client.get("/api/visits", params={"device": "dev-1",
                                              "start": 0, "end": 2_000_000}).json()
-    assert body["visits"][0]["label"] == "Zuhause"
-    assert body["visits"][0]["address"] == "Zuhause, Berlin"
+    assert body["visits"][0]["label"] == "Home"
+    assert body["visits"][0]["address"] == "Home, Berlin"
 
 
 def test_visits_endpoint_queues_uncached_coords_when_geocoding_is_on(client):
@@ -166,7 +166,7 @@ def test_visits_endpoint_queues_uncached_coords_when_geocoding_is_on(client):
 
     main = client._main
     main._geocoder = Geocoder(main._store, base_url="https://example.test",
-                              http_get=lambda url: {"display_name": "Ort, Stadt", "address": {}})
+                              http_get=lambda url: {"display_name": "Place, City", "address": {}})
     _seed_stay(main._store)
 
     body = client.get("/api/visits", params={"device": "dev-1",
@@ -178,5 +178,5 @@ def test_visits_endpoint_queues_uncached_coords_when_geocoding_is_on(client):
     main._geocoder._drain_one()
     body2 = client.get("/api/visits", params={"device": "dev-1",
                                               "start": 0, "end": 2_000_000}).json()
-    assert body2["visits"][0]["label"] == "Ort"
+    assert body2["visits"][0]["label"] == "Place"
     assert body2["pending"] == 0
