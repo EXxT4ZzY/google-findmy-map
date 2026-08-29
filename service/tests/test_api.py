@@ -7,26 +7,59 @@ import types
 import pytest
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
+def _build_client(tmp_path, monkeypatch, env=None):
     stub = types.ModuleType("locations")
     stub.poll_all_devices = lambda: []
     monkeypatch.setitem(sys.modules, "locations", stub)
     monkeypatch.setenv("GFM_HISTORY_DB", str(tmp_path / "history.db"))
     monkeypatch.setenv("GFM_HISTORY_FILE", str(tmp_path / "history.json"))
     monkeypatch.setenv("GFM_WEB_DIR", str(tmp_path))
-    monkeypatch.setenv("GFM_NOMINATIM_URL", "")  # no network in tests
-    (tmp_path / "index.html").write_text("<html></html>")
+    monkeypatch.setenv("GFM_NOMINATIM_URL", "")   # no network in tests
+    monkeypatch.setenv("GFM_LOGIN_DELAY_MS", "0")
+    for name, content in (
+        ("index.html", "<html>index</html>"),
+        ("login.html", "<html>login</html>"),
+        ("settings.html", "<html>settings</html>"),
+        ("app.js", "// app"),
+        ("app.css", "/* css */"),
+    ):
+        (tmp_path / name).write_text(content)
+    for key, value in (env or {}).items():
+        monkeypatch.setenv(key, value)
 
-    for mod in ("main", "augment", "store", "colors", "visits", "geocode"):
+    for mod in ("main", "auth", "augment", "store", "colors", "visits", "geocode"):
         monkeypatch.delitem(sys.modules, mod, raising=False)
     import main
 
     from fastapi.testclient import TestClient
+    c = TestClient(main.app)
+    c._main = main
+    return c
 
-    with TestClient(main.app) as c:
-        c._main = main
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    c = _build_client(tmp_path, monkeypatch)
+    with c:
         yield c
+
+
+@pytest.fixture
+def make_client(tmp_path, monkeypatch):
+    """Build extra clients sharing this test's tmp DB (e.g. with different env)."""
+    def _make(**env):
+        return _build_client(tmp_path, monkeypatch, env)
+    return _make
+
+
+def _enable_auth(client, password="secret123"):
+    r = client.put("/api/settings/auth", json={"enabled": True, "new_password": password})
+    assert r.status_code == 200
+    return r
+
+
+def _login(client, password):
+    return client.post("/api/auth/login", json={"password": password})
 
 
 def test_history_endpoint_returns_points_in_the_window(client):
@@ -180,3 +213,33 @@ def test_visits_endpoint_queues_uncached_coords_when_geocoding_is_on(client):
                                               "start": 0, "end": 2_000_000}).json()
     assert body2["visits"][0]["label"] == "Place"
     assert body2["pending"] == 0
+
+
+class TestAuthGate:
+    def test_auth_is_off_by_default(self, client):
+        assert client.get("/api/locations").status_code == 200
+        assert client.get("/", follow_redirects=False).status_code == 200
+
+    def test_enabling_auth_gates_api_and_pages(self, client):
+        _enable_auth(client)                       # PUT response sets the cookie
+        assert client.get("/api/locations").status_code == 200
+        client.cookies.clear()
+        assert client.get("/api/locations").status_code == 401
+        r = client.get("/", follow_redirects=False)
+        assert r.status_code == 302 and "/login.html" in r.headers["location"]
+
+    def test_allowlisted_paths_reachable_while_locked(self, client):
+        _enable_auth(client)
+        client.cookies.clear()
+        assert client.get("/login.html").status_code == 200
+        assert client.get("/app.js").status_code == 200
+        assert client.get("/api/auth/status").status_code == 200
+
+    def test_auth_disable_env_overrides_the_db(self, make_client):
+        c1 = make_client()
+        with c1:
+            _enable_auth(c1)
+        c2 = make_client(GFM_AUTH_DISABLE="1")
+        with c2:
+            c2.cookies.clear()
+            assert c2.get("/api/locations").status_code == 200

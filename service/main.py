@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -5,6 +6,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 # The vendored GoogleFindMyTools checkout must be on sys.path *before* we
 # import anything from locations.py, since that module imports top-level
@@ -14,11 +16,12 @@ sys.path.insert(0, str(VENDOR_DIR))
 
 import re
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import auth
 import colors
 import locations
 import visits as visits_mod
@@ -41,6 +44,9 @@ NOMINATIM_URL = os.environ.get("GFM_NOMINATIM_URL", "https://nominatim.openstree
 GEOCODE_EMAIL = os.environ.get("GFM_GEOCODE_EMAIL") or None
 VISIT_RADIUS_M = float(os.environ.get("GFM_VISIT_RADIUS_M", "100"))
 VISIT_MIN_SECONDS = int(float(os.environ.get("GFM_VISIT_MIN_MINUTES", "15")) * 60)
+
+AUTH_DISABLED = os.environ.get("GFM_AUTH_DISABLE", "").strip().lower() in ("1", "true", "yes")
+LOGIN_DELAY_SECONDS = int(os.environ.get("GFM_LOGIN_DELAY_MS", "500")) / 1000
 
 DEFAULT_HISTORY_WINDOW_SECONDS = 7 * 24 * 3600
 
@@ -86,6 +92,9 @@ def _poll_loop():
 
 @asynccontextmanager
 async def lifespan(_app):
+    _store.session_secret()  # ensure it exists before any request
+    if AUTH_DISABLED:
+        log.warning("GFM_AUTH_DISABLE is set -- built-in authentication is OFF.")
     threading.Thread(target=_poll_loop, daemon=True).start()
     _geocoder.start()
     yield
@@ -93,6 +102,26 @@ async def lifespan(_app):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+_login_throttle = auth.LoginThrottle()
+
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    if AUTH_DISABLED:
+        return await call_next(request)
+    cfg = _store.get_config_many(["auth_enabled", "cred_version"])
+    if cfg.get("auth_enabled") != "1":
+        return await call_next(request)
+    path = request.url.path
+    if path in PUBLIC_PATHS or _token_ok(request, cfg):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
+    query = f"?{request.url.query}" if request.url.query else ""
+    nxt = quote(path + query, safe="")
+    return RedirectResponse(f"/login.html?next={nxt}", status_code=302)
 
 
 def block_cross_site(request: Request):
@@ -107,6 +136,42 @@ def block_cross_site(request: Request):
     site = request.headers.get("sec-fetch-site")
     if site is not None and site not in ("same-origin", "none"):
         raise HTTPException(status_code=403, detail="cross-site request rejected")
+
+
+SESSION_COOKIE = "fmm_session"
+PASSWORD_MIN_LENGTH = 8
+PUBLIC_PATHS = {
+    "/login.html", "/app.css", "/app.js", "/favicon.ico",
+    "/api/auth/login", "/api/auth/status", "/api/auth/logout",
+}
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def request_is_https(request: Request) -> bool:
+    xfp = request.headers.get("x-forwarded-proto")
+    scheme = xfp.split(",")[0].strip() if xfp else request.url.scheme
+    return scheme == "https"
+
+
+def _token_ok(request: Request, cfg: dict) -> bool:
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return False
+    return auth.parse_session_token(
+        token, _store.session_secret(), int(cfg.get("cred_version") or "1")
+    )
+
+
+def _set_session_cookie(response: Response, request: Request) -> None:
+    version = int(_store.get_config("cred_version", "1"))
+    token = auth.make_session_token(_store.session_secret(), version)
+    response.set_cookie(
+        SESSION_COOKIE, token, max_age=30 * 24 * 3600, httponly=True,
+        samesite="lax", secure=request_is_https(request), path="/",
+    )
 
 
 def _device_name(device_id):
