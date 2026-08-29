@@ -40,23 +40,6 @@ Wichtige `.env`-Werte:
 
 Alle weiteren (optionalen) Variablen sind in `.env.example` dokumentiert.
 
-## Reverse-Proxy-Anbindung
-
-Die App lauscht **intern auf Port 8080**, ohne Host-Port-Mapping. Der Proxy
-muss im selben Netz hängen und auf `findmy-map:8080` weiterleiten – **mit
-vorgeschalteter Authentifizierung**.
-
-```yaml
-# Traefik (Beispiel; forward-auth / basic-auth-Middleware ergänzen!)
-labels:
-  - traefik.enable=true
-  - traefik.http.routers.findmy-map.rule=Host(`findmy.example.com`)
-  - traefik.http.services.findmy-map.loadbalancer.server.port=8080
-```
-
-- **nginx-proxy-manager**: Ziel `findmy-map:8080`, Access List mit Auth.
-- **Caddy**: `reverse_proxy findmy-map:8080` + `basicauth` / `forward_auth`.
-
 ## Web-UI
 
 - **Hell/Dunkel-Umschalter** (☀/☾ im Kopf beider Seiten), Wahl im Browser
