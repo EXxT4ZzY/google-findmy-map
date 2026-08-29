@@ -15,25 +15,10 @@ sodass **keine erneute Anmeldung** nötig ist.
 > Dieses Projekt steht in keiner Verbindung zu Google oder Apple. Nutzung auf
 > eigene Verantwortung und nur für Geräte/Konten, für die du berechtigt bist.
 
-## ⚠️ Sicherheit: keine Authentifizierung
-
-Der Dienst hat **keinerlei Login oder Zugriffsschutz**. Wer den HTTP-Port
-erreicht, sieht den **kompletten Standortverlauf** und die **besuchten
-Adressen** deiner Geräte und kann Gerätenamen ändern und Abfragen auslösen.
-
-**Betreibe ihn ausschließlich hinter einem Reverse Proxy, der
-Authentifizierung erzwingt** (Basic-Auth, oauth2-proxy, Authelia, VPN,
-Tailscale, …). Das mitgelieferte `docker-compose.yml` published bewusst
-**keine Ports** und hängt nur an einem externen Proxy-Netz. Details und die
-eingebauten Defense-in-Depth-Maßnahmen: **[SECURITY.md](SECURITY.md)**.
-
 ## Voraussetzungen
 
 - Ein bereits **angemeldeter** GoogleFindMyTools-Container; seine
   `Auth/secrets.json` existiert und enthält gültige Tokens.
-- Docker + Docker Compose.
-- Ein externes Docker-Netzwerk für deinen Reverse Proxy
-  (`docker network create proxy-net`, falls noch nicht vorhanden).
 
 ## Setup
 
