@@ -87,3 +87,38 @@ def parse_session_token(token: str, secret: str, cred_version: int, *,
         return False
     age = int(now if now is not None else time.time()) - iat
     return -_CLOCK_SKEW <= age <= max_age
+
+
+class LoginThrottle:
+    """Process-local per-IP failed-login tracking. Resets on restart."""
+
+    WINDOW = 15 * 60
+    FREE_ATTEMPTS = 5
+    COOLDOWNS = (30, 120, 600, 1800)  # seconds; the last value repeats
+
+    def __init__(self) -> None:
+        self._fails: dict[str, list[float]] = {}
+
+    def _recent(self, ip: str, now: float) -> list[float]:
+        times = [t for t in self._fails.get(ip, []) if now - t < self.WINDOW]
+        if times:
+            self._fails[ip] = times
+        else:
+            self._fails.pop(ip, None)
+        return times
+
+    def retry_after(self, ip: str, *, now: float | None = None) -> int:
+        now = time.time() if now is None else now
+        times = self._recent(ip, now)
+        level = len(times) - self.FREE_ATTEMPTS
+        if level < 0:
+            return 0
+        cooldown = self.COOLDOWNS[min(level, len(self.COOLDOWNS)) - 1]
+        return max(0, math.ceil(times[-1] + cooldown - now))
+
+    def record_failure(self, ip: str, *, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+        self._fails.setdefault(ip, []).append(now)
+
+    def record_success(self, ip: str) -> None:
+        self._fails.pop(ip, None)
