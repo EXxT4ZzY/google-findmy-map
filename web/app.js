@@ -16,6 +16,9 @@
       refreshing: 'Refreshing…',
       timeline_link: 'Timeline →',
       edit: 'Edit',
+      ring: 'Ring',
+      stop_ring: 'Stop ringing',
+      at_place: '{place} · {time}',
       last_poll: 'Last poll',
       never: 'none yet',
       error: 'Error',
@@ -64,6 +67,7 @@
       // login page
       page_title_login: 'FindMy Map – Sign in',
       login_heading: 'FindMy Map',
+      f_username: 'Username',
       f_password: 'Password',
       sign_in: 'Sign in',
       login_wrong: 'Wrong password.',
@@ -90,6 +94,7 @@
       err_pw_short: 'Password must be at least 8 characters.',
       err_pw_mismatch: 'The passwords do not match.',
       err_current_pw: 'Current password is incorrect.',
+      err_username_required: 'Username is required.',
     },
     de: {
       toggle_sheet: 'Panel ein-/ausklappen',
@@ -101,6 +106,9 @@
       refreshing: 'Aktualisiere…',
       timeline_link: 'Zeitachse →',
       edit: 'Bearbeiten',
+      ring: 'Klingeln lassen',
+      stop_ring: 'Klingeln stoppen',
+      at_place: '{place} · {time}',
       last_poll: 'Letzte Abfrage',
       never: 'noch keine',
       error: 'Fehler',
@@ -148,6 +156,7 @@
       // login page
       page_title_login: 'FindMy Map – Anmelden',
       login_heading: 'FindMy Map',
+      f_username: 'Benutzername',
       f_password: 'Passwort',
       sign_in: 'Anmelden',
       login_wrong: 'Falsches Passwort.',
@@ -174,6 +183,7 @@
       err_pw_short: 'Das Passwort muss mindestens 8 Zeichen haben.',
       err_pw_mismatch: 'Die Passwörter stimmen nicht überein.',
       err_current_pw: 'Aktuelles Passwort ist falsch.',
+      err_username_required: 'Benutzername ist erforderlich.',
     },
   };
 

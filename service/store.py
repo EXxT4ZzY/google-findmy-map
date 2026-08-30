@@ -29,9 +29,11 @@ CREATE TABLE IF NOT EXISTS locations (
 );
 
 CREATE TABLE IF NOT EXISTS device_settings (
-    device_id TEXT PRIMARY KEY,
-    name      TEXT,   -- NULL: no name override, use the polled name
-    color     TEXT    -- NULL: no colour override, fall back to env/palette
+    device_id       TEXT PRIMARY KEY,
+    name            TEXT,   -- NULL: no name override, use the polled name
+    color           TEXT,   -- NULL: no colour override, fall back to env/palette
+    last_known_name TEXT    -- last name Google reported for this device, kept
+                             -- even after it drops out of the live poll list
 );
 
 CREATE TABLE IF NOT EXISTS geocode_cache (
@@ -52,6 +54,14 @@ CREATE TABLE IF NOT EXISTS app_config (
 _GEOCODE_PRECISION = 4
 
 
+def _migrate_schema(conn):
+    """Add columns introduced after the initial ``CREATE TABLE`` to a DB that
+    already exists -- ``CREATE TABLE IF NOT EXISTS`` is a no-op on those."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(device_settings)")}
+    if "last_known_name" not in cols:
+        conn.execute("ALTER TABLE device_settings ADD COLUMN last_known_name TEXT")
+
+
 class LocationStore:
     def __init__(self, path):
         self._lock = threading.Lock()
@@ -66,6 +76,7 @@ class LocationStore:
             conn = sqlite3.connect(path, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
+            _migrate_schema(conn)
             conn.commit()
             return conn
         except sqlite3.Error as exc:
@@ -77,6 +88,7 @@ class LocationStore:
             )
             conn = sqlite3.connect(":memory:", check_same_thread=False)
             conn.executescript(_SCHEMA)
+            _migrate_schema(conn)
             conn.commit()
             return conn
 
@@ -110,6 +122,24 @@ class LocationStore:
                     )
                     self._write_warned = True
 
+    def prune_older_than(self, cutoff_ts):
+        """Delete location fixes older than ``cutoff_ts`` (unix seconds).
+
+        Returns the number of rows deleted. Only ``locations`` is pruned --
+        it is the table that grows unbounded; ``geocode_cache`` is small and
+        self-limiting (one row per rounded coordinate cell).
+        """
+        with self._lock:
+            try:
+                cur = self._conn.execute(
+                    "DELETE FROM locations WHERE ts < ?", (int(cutoff_ts),)
+                )
+                self._conn.commit()
+                return cur.rowcount
+            except sqlite3.Error as exc:
+                log.warning("Could not prune history: %s", exc)
+                return 0
+
     def set_setting(self, device_id, name=None, color=None):
         """Upsert a device's display-name / pin-colour override.
 
@@ -142,6 +172,62 @@ class LocationStore:
                 "SELECT device_id, name, color FROM device_settings"
             ).fetchall()
         return {r[0]: {"name": r[1], "color": r[2]} for r in rows}
+
+    def set_last_seen_name(self, device_id, name):
+        """Remember the name Google most recently reported for a device.
+
+        Called on every poll so the name survives the device later dropping
+        out of the live poll list (see :meth:`known_devices`). Distinct from
+        the ``name`` column, which is the user's manual override.
+        """
+        if not name:
+            return
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO device_settings (device_id, last_known_name) "
+                    "VALUES (?, ?) "
+                    "ON CONFLICT(device_id) DO UPDATE SET last_known_name = ?",
+                    (device_id, name, name),
+                )
+                self._conn.commit()
+            except sqlite3.Error as exc:
+                if not self._write_warned:
+                    log.warning(
+                        "Could not write last-known device name: %s (further "
+                        "write errors suppressed).",
+                        exc,
+                    )
+                    self._write_warned = True
+
+    def known_devices(self):
+        """Every device ever seen: ``[{"id", "name", "last_seen"}, ...]``.
+
+        Includes devices no longer returned by the live poll, as long as
+        they have history and/or a remembered name. ``name`` prefers a
+        manual override, then the last name Google reported, then the raw
+        device id. ``last_seen`` is ``None`` for a device that only ever
+        reported semantic (coordinate-less) locations. Sorted most
+        recently seen first.
+        """
+        with self._lock:
+            last_seen_rows = self._conn.execute(
+                "SELECT device_id, MAX(ts) FROM locations GROUP BY device_id"
+            ).fetchall()
+            settings_rows = self._conn.execute(
+                "SELECT device_id, name, last_known_name FROM device_settings"
+            ).fetchall()
+        last_seen = {r[0]: r[1] for r in last_seen_rows}
+        settings = {r[0]: {"name": r[1], "last_known_name": r[2]} for r in settings_rows}
+        out = []
+        for device_id in set(last_seen) | set(settings):
+            s = settings.get(device_id, {})
+            name = s.get("name") or s.get("last_known_name") or device_id
+            out.append({
+                "id": device_id, "name": name, "last_seen": last_seen.get(device_id),
+            })
+        out.sort(key=lambda d: (d["last_seen"] is None, -(d["last_seen"] or 0)))
+        return out
 
     # -- application config (auth) ---------------------------------------
 

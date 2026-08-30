@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 
@@ -59,6 +60,28 @@ class TestRange:
     def test_range_with_no_data_in_window_is_empty(self, store):
         store.add("dev", pt(time=100))
         assert store.range("dev", 0, 50) == []
+
+
+class TestPruning:
+    def test_prune_deletes_only_older_points(self, store):
+        store.add("dev", pt(time=100))
+        store.add("dev", pt(time=200))
+        deleted = store.prune_older_than(150)
+        assert deleted == 1
+        assert [p["time"] for p in store.range("dev", 0, 1000)] == [200]
+
+    def test_prune_returns_zero_when_nothing_is_old_enough(self, store):
+        store.add("dev", pt(time=100))
+        assert store.prune_older_than(50) == 0
+        assert len(store.range("dev", 0, 1000)) == 1
+
+    def test_prune_spans_all_devices(self, store):
+        store.add("a", pt(time=1))
+        store.add("b", pt(time=1))
+        store.add("b", pt(time=1000))
+        assert store.prune_older_than(500) == 2
+        assert store.range("a", 0, 2000) == []
+        assert len(store.range("b", 0, 2000)) == 1
 
 
 class TestPersistence:
@@ -122,6 +145,71 @@ class TestDeviceSettings:
         second = LocationStore(path)
         assert second.get_settings() == {"dev": {"name": "Car", "color": "#00ff00"}}
         second.close()
+
+
+class TestKnownDevices:
+    def test_empty_by_default(self, store):
+        assert store.known_devices() == []
+
+    def test_a_device_with_history_but_no_settings_row(self, store):
+        store.add("dev", pt(time=1000))
+        assert store.known_devices() == [{"id": "dev", "name": "dev", "last_seen": 1000}]
+
+    def test_last_known_name_is_used_as_a_fallback(self, store):
+        store.add("dev", pt(time=1000))
+        store.set_last_seen_name("dev", "iPhone")
+        assert store.known_devices() == [
+            {"id": "dev", "name": "iPhone", "last_seen": 1000}
+        ]
+
+    def test_manual_rename_takes_priority_over_last_known_name(self, store):
+        store.add("dev", pt(time=1000))
+        store.set_last_seen_name("dev", "iPhone")
+        store.set_setting("dev", name="Backpack")
+        assert store.known_devices()[0]["name"] == "Backpack"
+
+    def test_renaming_does_not_clobber_the_last_known_name(self, store):
+        store.set_last_seen_name("dev", "iPhone")
+        store.set_setting("dev", name="Backpack")
+        store.set_setting("dev", name="", color="")   # clear the override again
+        assert store.known_devices()[0]["name"] == "iPhone"
+
+    def test_a_device_with_only_a_remembered_name_and_no_history(self, store):
+        """A device that only ever reported semantic (coordinate-less)
+        locations never gets a row in `locations` at all."""
+        store.set_last_seen_name("dev", "iPhone")
+        assert store.known_devices() == [{"id": "dev", "name": "iPhone", "last_seen": None}]
+
+    def test_empty_name_does_not_overwrite_a_known_one(self, store):
+        store.set_last_seen_name("dev", "iPhone")
+        store.set_last_seen_name("dev", "")
+        assert store.known_devices()[0]["name"] == "iPhone"
+
+    def test_sorted_most_recently_seen_first_then_never_seen_last(self, store):
+        store.add("old", pt(time=1000))
+        store.add("new", pt(time=5000))
+        store.set_last_seen_name("no-history", "Ghost")
+        assert [d["id"] for d in store.known_devices()] == ["new", "old", "no-history"]
+
+    def test_migrating_an_existing_db_adds_the_last_known_name_column(self, tmp_path):
+        """A DB created before this feature existed has `device_settings`
+        without `last_known_name` -- the ALTER TABLE migration must run on
+        an existing table, not just at fresh-schema creation time."""
+        path = tmp_path / "history.db"
+        conn = sqlite3.connect(str(path))
+        conn.execute(
+            "CREATE TABLE device_settings (device_id TEXT PRIMARY KEY, name TEXT, color TEXT)"
+        )
+        conn.execute("INSERT INTO device_settings (device_id, name) VALUES ('dev', 'Car')")
+        conn.commit()
+        conn.close()
+
+        opened = LocationStore(path)
+        try:
+            opened.set_last_seen_name("dev", "iPhone")   # would raise if the column were missing
+            assert opened.known_devices()[0]["name"] == "Car"
+        finally:
+            opened.close()
 
 
 class TestGeocodeCache:

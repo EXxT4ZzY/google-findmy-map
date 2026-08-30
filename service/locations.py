@@ -19,6 +19,7 @@ from NovaApi.ExecuteAction.LocateTracker.decrypt_locations import (
     retrieve_identity_key,
 )
 from NovaApi.ExecuteAction.LocateTracker.location_request import create_location_request
+from NovaApi.ExecuteAction.PlaySound.sound_request import create_sound_request
 from NovaApi.ListDevices.nbe_list_devices import request_device_list
 from NovaApi.nova_request import nova_request
 from NovaApi.scopes import NOVA_ACTION_API_SCOPE
@@ -38,6 +39,7 @@ from SpotApi.UploadPrecomputedPublicKeyIds.upload_precomputed_public_key_ids imp
 log = logging.getLogger("findmy-map")
 
 LOCATION_FETCH_TIMEOUT = 25  # seconds to wait for a single device's FCM response
+SOUND_REQUEST_GRACE_SECONDS = 2  # hold the FCM registration open long enough to send
 
 
 def list_devices():
@@ -93,9 +95,13 @@ def _extract_locations(device_update):
     results = []
     for loc, ts in zip(network_locations, network_times):
         if loc.status == Common_pb2.Status.SEMANTIC:
+            # "place_name", not "name" -- poll_all_devices() merges this dict
+            # straight into a per-device entry that already has a "name" key
+            # (the device's own display name); reusing that key here would
+            # silently overwrite it with the place name.
             results.append({
                 "type": "semantic",
-                "name": loc.semanticLocation.locationName,
+                "place_name": loc.semanticLocation.locationName,
                 "time": int(ts.seconds),
             })
             continue
@@ -143,7 +149,8 @@ def poll_all_devices():
 
     Returns a list of dicts, one per device, always containing at least
     'name' and 'id'. On success it also contains either a 'geo' fix
-    (latitude/longitude/...) or a 'semantic' location (name only); on
+    (latitude/longitude/...) or a 'semantic' location ('place_name' only,
+    no coordinates -- Google's protocol doesn't carry any for these); on
     failure it contains an 'error' string instead.
     """
     devices = []
@@ -181,3 +188,60 @@ def poll_all_devices():
         devices.append(entry)
 
     return devices
+
+
+def _send_sound_request(canonic_device_id: str, should_start: bool) -> bool:
+    """Start or stop a device's "find my device" sound.
+
+    Returns whether the request was sent, not whether the device actually
+    rang -- Play Sound has no delivery confirmation, unlike a location fetch
+    (see _fetch_device_update), so there is nothing to wait on.
+
+    Returns as soon as the push is sent, not after -- callers (the web UI)
+    are waiting on this to tell the operator their tap registered, and every
+    second added here is a second of that feedback loop. The FCM
+    registration still needs to stay open a little longer for the push to
+    actually go out, but that grace period and the callback cleanup happen
+    in a background thread instead of blocking the response.
+    """
+    receiver = FcmReceiver()
+
+    def handle(_response_hex):
+        pass  # no response payload to act on
+
+    def cleanup_after_grace_period():
+        time.sleep(SOUND_REQUEST_GRACE_SECONDS)
+        # Same leak-avoidance as _fetch_device_update: upstream never
+        # removes these callbacks itself.
+        try:
+            receiver.location_update_callbacks.remove(handle)
+        except ValueError:
+            pass
+
+    fcm_token = receiver.register_for_location_updates(handle)
+    try:
+        hex_payload = create_sound_request(should_start, canonic_device_id, fcm_token)
+        nova_request(NOVA_ACTION_API_SCOPE, hex_payload)
+    except Exception:
+        log.exception(
+            "Failed to %s the sound on device %r",
+            "start" if should_start else "stop", canonic_device_id,
+        )
+        try:
+            receiver.location_update_callbacks.remove(handle)
+        except ValueError:
+            pass
+        return False
+
+    threading.Thread(target=cleanup_after_grace_period, daemon=True).start()
+    return True
+
+
+def start_sound(canonic_device_id: str) -> bool:
+    """Make a device play its "find my device" sound."""
+    return _send_sound_request(canonic_device_id, should_start=True)
+
+
+def stop_sound(canonic_device_id: str) -> bool:
+    """Stop a device's "find my device" sound started by start_sound()."""
+    return _send_sound_request(canonic_device_id, should_start=False)

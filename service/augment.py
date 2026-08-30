@@ -11,6 +11,10 @@ attach:
   "reset to default");
 * ``last_location_time`` - the timestamp of the most recent known fix,
   which survives a failed poll because it comes from the store.
+
+It also persists the polled name into the store on every call, so it
+survives the device later dropping out of the live poll list (see
+``LocationStore.known_devices()``, used by the timeline's device picker).
 """
 
 import colors
@@ -48,6 +52,9 @@ def augment_device(
     device["name"] = override.get("name") or device["default_name"]
     device["name_is_custom"] = bool(override.get("name"))
     device["color_is_custom"] = bool(override.get("color"))
+    # Remembered even after the device drops out of the live poll list --
+    # see LocationStore.known_devices().
+    store.set_last_seen_name(device["id"], device["default_name"])
 
     track = store.recent(device["id"], RECENT_TRACK_LENGTH)
     device["history"] = track

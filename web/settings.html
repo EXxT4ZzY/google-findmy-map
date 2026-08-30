@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <title data-i18n="page_title_settings">FindMy Map – Settings</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon.ico" sizes="any">
 <link rel="stylesheet" href="app.css" />
 <script src="app.js"></script>
 </head>
@@ -39,6 +41,10 @@
       </label>
 
       <div id="auth-fields" hidden>
+        <div class="field">
+          <label for="auth-username" data-i18n="f_username">Username</label>
+          <input type="text" id="auth-username" autocomplete="username">
+        </div>
         <div class="field" id="cur-field" hidden>
           <label for="cur-pw" data-i18n="f_current_password">Current password</label>
           <input type="password" id="cur-pw" autocomplete="current-password">
@@ -83,6 +89,7 @@
 
   const box = document.getElementById('auth-enabled');
   const fields = document.getElementById('auth-fields');
+  const usernameInput = document.getElementById('auth-username');
   const curField = document.getElementById('cur-field');
   const newLabel = document.getElementById('new-pw-label');
   const msg = document.getElementById('auth-msg');
@@ -112,6 +119,7 @@
     try { state = await (await fetch('/api/auth/status')).json(); }
     catch (e) { state = { auth_enabled: false }; }
     box.checked = state.auth_enabled;
+    usernameInput.value = state.username || '';
     renderAuth();
   }
 
@@ -120,6 +128,9 @@
     const enabled = box.checked;
     const body = { enabled };
     if (enabled) {
+      const un = usernameInput.value.trim();
+      if (!state.auth_enabled && !un) { setMsg(t('err_username_required'), true); return; }
+      body.username = un;
       const np = newPw.value, cp = confirmPw.value;
       if (np || cp || !state.auth_enabled) {
         if (np.length < 8) { setMsg(t('err_pw_short'), true); return; }

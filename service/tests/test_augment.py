@@ -24,6 +24,10 @@ def error_device(id="dev-1", name="Phone", error="no_response"):
     return {"name": name, "id": id, "error": error}
 
 
+def semantic_device(id="dev-1", name="Phone", place_name="Home", time=2000):
+    return {"name": name, "id": id, "type": "semantic", "place_name": place_name, "time": time}
+
+
 class TestAugmentDevice:
     def test_records_geo_fix_into_the_store(self, store):
         augment_device(geo_device(time=2000), store, {})
@@ -66,6 +70,41 @@ class TestAugmentDevice:
     def test_default_name_always_holds_the_polled_name(self, store):
         result = augment_device(geo_device(name="iPhone"), store, {})
         assert result["default_name"] == "iPhone"
+
+
+class TestSemanticLocations:
+    def test_place_name_does_not_overwrite_the_device_name(self, store):
+        """Regression test: poll_all_devices() used to merge the semantic
+        location's own "name" key straight into the device entry, silently
+        replacing the device's display name with the place name."""
+        result = augment_device(semantic_device(name="iPhone", place_name="Home"), store, {})
+        assert result["name"] == "iPhone"
+        assert result["place_name"] == "Home"
+
+    def test_semantic_device_is_not_written_to_the_location_history(self, store):
+        augment_device(semantic_device(), store, {})
+        assert store.recent("dev-1") == []
+
+    def test_last_location_time_falls_back_to_the_semantic_fix_time(self, store):
+        result = augment_device(semantic_device(time=4000), store, {})
+        assert result["last_location_time"] == 4000
+
+
+class TestLastKnownNamePersistence:
+    def test_polled_name_is_persisted_for_known_devices(self, store):
+        augment_device(geo_device(id="dev-1", name="iPhone"), store, {})
+        assert store.known_devices() == [
+            {"id": "dev-1", "name": "iPhone", "last_seen": 2000}
+        ]
+
+    def test_a_manual_rename_is_not_overwritten_by_the_polled_name(self, store):
+        store.set_setting("dev-1", name="Backpack")
+        augment_device(geo_device(name="iPhone"), store, {}, settings=store.get_settings())
+        assert store.known_devices()[0]["name"] == "Backpack"
+
+    def test_semantic_only_devices_are_persisted_too(self, store):
+        augment_device(semantic_device(id="dev-2", name="Watch"), store, {})
+        assert any(d["id"] == "dev-2" and d["name"] == "Watch" for d in store.known_devices())
 
 
 class TestDeviceSettingsOverrides:

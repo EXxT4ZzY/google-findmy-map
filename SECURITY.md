@@ -2,10 +2,17 @@
 
 ## Authentication
 
-`findmy-map` has an **optional** built-in login: a single account (the
-form asks only for a password), a signed session cookie, and per-IP
-throttling of failed attempts. It is **disabled by default**. Enable it
-and set the password on the settings page (the gear icon in the header).
+`findmy-map` has an **optional** built-in login: a single account
+identified by a username and a password, a signed session cookie, and
+per-IP throttling of failed attempts. It is **disabled by default**.
+Enable it and set the username and password on the settings page (the
+gear icon in the header) — both are required the first time you enable
+it.
+
+Installs that enabled auth before this credential existed keep working
+with just a password after an upgrade: the username is only checked once
+one has actually been set (empty/unset means "not enforced"), so nothing
+locks out until you visit the settings page and set one.
 
 ### With authentication enabled
 
@@ -23,9 +30,10 @@ IPs (the `Secure` detection works regardless).
 attempt. After 5 failures from one IP within 15 minutes that IP is put on
 a cooldown that grows 30 s → 2 min → 10 min → 30 min.
 
-**Forgot the password / locked out:** set `GFM_AUTH_DISABLE=1` in the
-environment and restart — authentication is then forced off regardless of
-the stored setting, so you can open the settings page and set a new one.
+**Forgot the username or password / locked out:** set `GFM_AUTH_DISABLE=1`
+in the environment and restart — authentication is then forced off
+regardless of the stored setting, so you can open the settings page and
+set new ones.
 
 ### With authentication disabled
 
@@ -36,21 +44,26 @@ an authenticating reverse proxy, a VPN, or Tailscale. The provided
 `proxy-net` network for this reason.
 
 Treat the database at `${GFM_DATA_DIR}/history.db` as sensitive personal
-data. Back it up and store it accordingly.
+data. Back it up and store it accordingly. By default it is kept forever;
+set `GFM_HISTORY_RETENTION_DAYS` if you'd rather it aged out automatically.
 
 ## Defence-in-depth measures built into the app
 
 These do **not** replace the reverse-proxy authentication above.
 
 - **Cross-site request blocking.** `POST /api/refresh`,
-  `PUT /api/devices/{id}`, `POST /api/auth/login` and `PUT /api/settings/auth`
+  `PUT /api/devices/{id}`, `POST /api/devices/{id}/ring[/stop]`,
+  `POST /api/auth/login` and `PUT /api/settings/auth`
   reject requests whose `Sec-Fetch-Site` header is
   `cross-site`/`same-site` (Fetch Metadata). This stops a random web page
-  the operator visits from triggering polls or edits. Non-browser clients
-  (curl, scripts) send no such header and are unaffected.
+  the operator visits from triggering polls, edits, or ringing a device.
+  Non-browser clients (curl, scripts) send no such header and are
+  unaffected.
 - **Input validation.** Pin colours (from the API and from
   `GFM_DEVICE_COLORS`) must be a plain hex value or CSS colour keyword; SQL
-  is fully parameterised; device names are HTML-escaped in the frontend.
+  is fully parameterised; device names, error text and semantic-location
+  place names are all HTML-escaped in the frontend before they ever reach
+  the DOM.
 - **Reverse-geocoding rate limiting.** The background geocoder makes at
   most one request every ~1.1 s to the configured Nominatim endpoint,
   negatively caches failed lookups, and backs off exponentially on
@@ -61,8 +74,9 @@ These do **not** replace the reverse-proxy authentication above.
 - **Password storage.** The password is stored as a stdlib `scrypt` hash
   (`n=2^14, r=8, p=1`), never in clear; verification is constant-time.
 - **Session tokens.** The session cookie is an HMAC-SHA256-signed token
-  bound to a `cred_version` counter; changing the password (or toggling
-  auth on) increments it and invalidates every existing session.
+  bound to a `cred_version` counter; changing the username, changing the
+  password, or toggling auth on all increment it and invalidate every
+  existing session.
 - **The `current_password` check on the settings page is not rate-limited.**
   It is only reachable with a valid session (the auth gate requires one
   when auth is on), and `scrypt` verification is deliberately slow, so

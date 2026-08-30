@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import logging
 import os
 import sys
@@ -45,6 +46,13 @@ GEOCODE_EMAIL = os.environ.get("GFM_GEOCODE_EMAIL") or None
 VISIT_RADIUS_M = float(os.environ.get("GFM_VISIT_RADIUS_M", "100"))
 VISIT_MIN_SECONDS = int(float(os.environ.get("GFM_VISIT_MIN_MINUTES", "15")) * 60)
 
+# Unset/"0" (the default) keeps history forever, exactly like before this
+# existed -- an upgrade never starts silently deleting data an existing
+# install never opted into losing.
+HISTORY_RETENTION_DAYS = float(os.environ.get("GFM_HISTORY_RETENTION_DAYS", "") or 0)
+_PRUNE_INTERVAL_SECONDS = 24 * 3600
+_last_prune = {"at": 0.0}
+
 AUTH_DISABLED = os.environ.get("GFM_AUTH_DISABLE", "").strip().lower() in ("1", "true", "yes")
 
 
@@ -86,6 +94,24 @@ def _augment_all(devices):
     ]
 
 
+def _maybe_prune_history():
+    """Delete location fixes older than GFM_HISTORY_RETENTION_DAYS, at most
+    once a day. No-op when unset (see HISTORY_RETENTION_DAYS)."""
+    if HISTORY_RETENTION_DAYS <= 0:
+        return
+    now = time.time()
+    if now - _last_prune["at"] < _PRUNE_INTERVAL_SECONDS:
+        return
+    _last_prune["at"] = now
+    cutoff = int(now - HISTORY_RETENTION_DAYS * 86400)
+    deleted = _store.prune_older_than(cutoff)
+    if deleted:
+        log.info(
+            "Pruned %d location fix(es) older than %s day(s).",
+            deleted, HISTORY_RETENTION_DAYS,
+        )
+
+
 def _poll_loop():
     while True:
         try:
@@ -99,6 +125,8 @@ def _poll_loop():
             log.exception("Polling cycle failed")
             with _state_lock:
                 _state["last_error"] = str(exc)
+
+        _maybe_prune_history()
 
         _refresh_now.wait(POLL_INTERVAL_SECONDS)
         _refresh_now.clear()
@@ -121,7 +149,7 @@ app = FastAPI(lifespan=lifespan)
 SESSION_COOKIE = "fmm_session"
 PASSWORD_MIN_LENGTH = 8
 PUBLIC_PATHS = {
-    "/login.html", "/app.css", "/app.js", "/favicon.ico",
+    "/login.html", "/app.css", "/app.js", "/favicon.ico", "/favicon.svg",
     "/api/auth/login", "/api/auth/status", "/api/auth/logout",
 }
 
@@ -142,7 +170,9 @@ def _auth_config() -> dict:
     """
     now = time.monotonic()
     if _config_cache["val"] is None or now - _config_cache["at"] > _CONFIG_CACHE_TTL:
-        _config_cache["val"] = _store.get_config_many(["auth_enabled", "cred_version"])
+        _config_cache["val"] = _store.get_config_many(
+            ["auth_enabled", "cred_version", "username"]
+        )
         _config_cache["at"] = now
     return _config_cache["val"]
 
@@ -230,6 +260,15 @@ def get_locations():
     return JSONResponse(payload)
 
 
+@app.get("/api/devices")
+def get_devices():
+    """Every device ever seen, including ones no longer in the live poll --
+    unlike /api/locations' `devices`, which only lists the current poll.
+    Used by the timeline's device picker so a removed device's history
+    stays reachable."""
+    return {"devices": _store.known_devices()}
+
+
 @app.post("/api/refresh", dependencies=[Depends(block_cross_site)])
 def trigger_refresh():
     _refresh_now.set()
@@ -242,11 +281,13 @@ class DeviceSettingsBody(BaseModel):
 
 
 class LoginBody(BaseModel):
+    username: str = ""
     password: str = ""
 
 
 class AuthSettingsBody(BaseModel):
     enabled: bool
+    username: str | None = None
     new_password: str | None = None
     current_password: str | None = None
 
@@ -270,6 +311,21 @@ def update_device(device_id: str, body: DeviceSettingsBody):
         "status": "ok",
         "settings": _settings.get(device_id, {"name": None, "color": None}),
     }
+
+
+@app.post("/api/devices/{device_id}/ring", dependencies=[Depends(block_cross_site)])
+def ring_device(device_id: str):
+    """Make a device play its "find my device" sound."""
+    if not locations.start_sound(device_id):
+        raise HTTPException(status_code=502, detail="could not reach the device")
+    return {"status": "ringing"}
+
+
+@app.post("/api/devices/{device_id}/ring/stop", dependencies=[Depends(block_cross_site)])
+def stop_ring_device(device_id: str):
+    if not locations.stop_sound(device_id):
+        raise HTTPException(status_code=502, detail="could not reach the device")
+    return {"status": "stopped"}
 
 
 @app.get("/api/history")
@@ -328,10 +384,15 @@ def get_visits(device: str, start: int | None = None, end: int | None = None):
 def auth_status(request: Request):
     cfg = _auth_config()
     enabled = not AUTH_DISABLED and cfg.get("auth_enabled") == "1"
-    return {
-        "auth_enabled": enabled,
-        "authenticated": enabled and _token_ok(request, cfg),
-    }
+    authenticated = enabled and _token_ok(request, cfg)
+    result = {"auth_enabled": enabled, "authenticated": authenticated}
+    if authenticated:
+        # Only ever revealed to a caller who already holds a valid session
+        # -- this is a public, unauthenticated-reachable endpoint otherwise,
+        # and must not leak the username to anonymous visitors. Lets the
+        # settings page prefill the field without a dedicated endpoint.
+        result["username"] = cfg.get("username") or ""
+    return result
 
 
 @app.post("/api/auth/login", dependencies=[Depends(block_cross_site)])
@@ -345,16 +406,23 @@ async def auth_login(body: LoginBody, request: Request, response: Response):
         )
     if LOGIN_DELAY_SECONDS:
         await asyncio.sleep(LOGIN_DELAY_SECONDS)
-    cfg = _store.get_config_many(["auth_enabled", "password"])
+    cfg = _store.get_config_many(["auth_enabled", "password", "username"])
     if cfg.get("auth_enabled") != "1":
         raise HTTPException(status_code=400, detail="authentication is disabled")
     # scrypt costs ~40 ms of CPU; run it off the event loop so concurrent
-    # login attempts cannot stall the whole service.
-    ok = await asyncio.to_thread(auth.verify_password, body.password,
-                                 cfg.get("password") or "")
-    if not ok:
+    # login attempts cannot stall the whole service. Always run it (even if
+    # the username already fails to match) so a wrong username takes the
+    # same time as a wrong password -- no timing side channel between them.
+    ok_password = await asyncio.to_thread(auth.verify_password, body.password,
+                                          cfg.get("password") or "")
+    stored_username = cfg.get("username") or ""
+    # No username has ever been configured for this account (an install
+    # that enabled auth before this credential existed) -- accept any
+    # username so upgrading never locks the operator out; see SECURITY.md.
+    ok_username = not stored_username or hmac.compare_digest(body.username, stored_username)
+    if not (ok_password and ok_username):
         _login_throttle.record_failure(ip)
-        raise HTTPException(status_code=401, detail="wrong password")
+        raise HTTPException(status_code=401, detail="wrong username or password")
     _login_throttle.record_success(ip)
     _set_session_cookie(response, request)
     return {"ok": True}
@@ -368,13 +436,14 @@ def auth_logout(response: Response):
 
 @app.put("/api/settings/auth", dependencies=[Depends(block_cross_site)])
 def update_auth_settings(body: AuthSettingsBody, request: Request, response: Response):
-    cfg = _store.get_config_many(["auth_enabled", "password", "cred_version"])
+    cfg = _store.get_config_many(["auth_enabled", "password", "cred_version", "username"])
     # While the GFM_AUTH_DISABLE escape hatch is set, auth is off for every
     # other purpose -- so this endpoint must take the bootstrap path too, or a
     # forgotten password could never be reset (that is the whole point of the
     # hatch; see SECURITY.md "Recovering from a forgotten password").
     currently_on = not AUTH_DISABLED and cfg.get("auth_enabled") == "1"
     stored = cfg.get("password") or ""
+    stored_username = cfg.get("username") or ""
     version = int(cfg.get("cred_version") or "1")
 
     def require_current():
@@ -388,12 +457,26 @@ def update_auth_settings(body: AuthSettingsBody, request: Request, response: Res
                 detail=f"password must be at least {PASSWORD_MIN_LENGTH} characters",
             )
 
+    def require_valid_username(candidate):
+        username = (candidate or "").strip()
+        if not username:
+            raise HTTPException(status_code=422, detail="a username is required")
+        return username
+
     if body.enabled:
         if currently_on:
-            if body.new_password is not None:          # password change
+            changing_password = body.new_password is not None
+            changing_username = (
+                body.username is not None and body.username.strip() != stored_username
+            )
+            if changing_password or changing_username:
                 require_current()
+            if changing_password:
                 require_valid_new()
                 _store.set_config("password", auth.hash_password(body.new_password))
+            if changing_username:
+                _store.set_config("username", require_valid_username(body.username))
+            if changing_password or changing_username:
                 _store.set_config("cred_version", str(version + 1))
                 _set_session_cookie(response, request)
             # enabled -> enabled with nothing to change: no-op
@@ -403,6 +486,10 @@ def update_auth_settings(body: AuthSettingsBody, request: Request, response: Res
                 _store.set_config("password", auth.hash_password(body.new_password))
             elif not stored:
                 raise HTTPException(status_code=422, detail="a password is required")
+            if body.username is not None:
+                _store.set_config("username", require_valid_username(body.username))
+            elif not stored_username:
+                raise HTTPException(status_code=422, detail="a username is required")
             _store.set_config("auth_enabled", "1")
             _store.set_config("cred_version", str(version + 1))
             _set_session_cookie(response, request)

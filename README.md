@@ -80,24 +80,36 @@ All other (optional) variables are documented in `.env.example`.
   line.
 - **Edit devices:** the ✎ button on each row → change the display name, pick a
   pin colour from a palette. **Default** clears both overrides.
+- **Ring a device:** the 🔔 button on each row makes it play its "find my
+  device" sound; tap again (or wait ~30 s) to stop. The button shakes the
+  instant the tap registers — there's a real multi-second FCM round-trip
+  before the phone actually rings, so that feedback can't wait on the
+  network.
+- A device whose last report is a **semantic location** (a named place
+  without coordinates, e.g. "Home") gets no map pin — Google's API doesn't
+  send coordinates for those — but the place name is shown in the device
+  list instead of being silently dropped.
 - **Timeline** (`timeline.html`): pick a device and a from/to date → the full
   track as a line, plus a **list of visited places** (address, arrival–
   departure, duration) with numbered markers. A visit is only formed when the
   stored history actually contains several reports from *one* place (radius
   `GFM_VISIT_RADIUS_M`) spanning at least `GFM_VISIT_MIN_MINUTES` — with a still
-  sparse history a note is shown, and it fills in over time.
+  sparse history a note is shown, and it fills in over time. The device
+  picker lists every device ever seen, not just ones in the current poll.
 
 ### Authentication
 
 Optional and **off by default**. Open the settings page (the ⚙ icon in the
-header), tick **Require login** and set a password (min. 8 characters).
-From then on every page and API call needs the session cookie from the
-login page. The same settings page changes the password or turns auth off
-again (both ask for the current password).
+header), tick **Require login** and set a username and a password (min. 8
+characters) — both are required the first time you enable it. From then on
+every page and API call needs the session cookie from the login page. The
+same settings page changes the username, the password, or turns auth off
+again (all three ask for the current password).
 
-If you lock yourself out, set `GFM_AUTH_DISABLE=1` and restart — auth is
-forced off so you can reset it. With auth enabled you can expose the
-service directly, but **only over HTTPS** (see `SECURITY.md`).
+If you lock yourself out — forgotten username or password — set
+`GFM_AUTH_DISABLE=1` and restart — auth is forced off so you can reset it.
+With auth enabled you can expose the service directly, but **only over
+HTTPS** (see `SECURITY.md`).
 
 ## How it works
 
@@ -110,9 +122,11 @@ service directly, but **only over HTTPS** (see `SECURITY.md`).
 - `service/locations.py` uses the library functions but returns structured
   data instead of only printing it.
 - `service/main.py` — FastAPI + a background poll thread. Endpoints:
-  `GET /api/locations` (incl. `palette`), `GET /api/history`,
-  `GET /api/visits`, `POST /api/refresh`, `PUT /api/devices/{id}`. The mutating
-  endpoints reject cross-site requests (Fetch Metadata).
+  `GET /api/locations` (incl. `palette`), `GET /api/devices` (every device
+  ever seen, for the timeline picker), `GET /api/history`, `GET /api/visits`,
+  `POST /api/refresh`, `PUT /api/devices/{id}`,
+  `POST /api/devices/{id}/ring[/stop]`. The mutating endpoints reject
+  cross-site requests (Fetch Metadata).
 - `service/store.py` — SQLite: full history (`add`/`recent`/`range` + a
   one-time `history.json` migration), device overrides, geocode cache.
 - `service/colors.py` (pin colour, with validation), `service/augment.py`
@@ -134,16 +148,18 @@ See `.env.example`. Summary:
 | `GFM_NOMINATIM_URL` | public OSM Nominatim | reverse geocoding; **empty = off** |
 | `GFM_GEOCODE_EMAIL` | – | contact email sent as the `email=` parameter (OSM policy) |
 | `GFM_VISIT_RADIUS_M` / `GFM_VISIT_MIN_MINUTES` | `100` / `15` | definition of a "visited place" |
+| `GFM_HISTORY_RETENTION_DAYS` | – | delete location fixes older than this many days; **empty = keep forever** (unchanged default) |
 | `GFM_AUTH_DISABLE` | – | `1` forces the optional login off (recovery from a lost password) |
 | `GFM_LOGIN_DELAY_MS` | `500` | fixed delay per login attempt |
 
 ## Known limitations
 
-- The location history grows unbounded (no cleanup logic). Fine for SQLite, but
-  `history.db` grows over time.
-- The timeline's device picker only lists devices returned by the current poll
-  (removed devices disappear even though history data still exists).
-- "Semantic locations" (named places without coordinates) get no marker.
+- The location history grows unbounded unless you opt into
+  `GFM_HISTORY_RETENTION_DAYS` — it defaults to off, so an upgrade never
+  starts silently deleting data an existing install never asked to lose.
+- "Semantic locations" (named places without coordinates, e.g. "Home") never
+  get a map pin — Google's API sends no coordinates for them, so there is
+  nothing to place on the map. The name is shown in the device list instead.
 - On an owner-key version change, `secrets.json` must be regenerated in the
   existing container.
 - `secrets.json` is written non-atomically by both containers; a conflict on an

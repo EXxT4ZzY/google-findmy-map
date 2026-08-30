@@ -120,12 +120,39 @@ body { background: var(--bg); color: var(--text); }
 }
 .device .time { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-.device-edit-btn {
-  margin-left: auto; flex-shrink: 0; align-self: center;
+.device-actions { margin-left: auto; flex-shrink: 0; align-self: center; display: flex; gap: 2px; }
+.device-ring-btn, .device-edit-btn {
   background: none; border: none; color: var(--muted);
   cursor: pointer; font-size: 14px; padding: 4px 6px; border-radius: 6px;
 }
-.device-edit-btn:hover { color: var(--text); background: var(--border); }
+.device-ring-btn:hover, .device-edit-btn:hover { color: var(--text); background: var(--border); }
+.device-ring-btn.ringing { color: var(--accent); }
+/* Instant, in-place "your tap registered" feedback -- there's a real
+   multi-second gap before the phone actually rings (FCM round-trip), so
+   this has to start the moment the button is pressed, not once the
+   request resolves. No popup/toast on purpose; the button itself is the
+   whole feedback surface. */
+.device-ring-btn.pending {
+  color: var(--accent);
+  animation: device-ring-pending 0.5s ease-in-out infinite;
+}
+.device-ring-btn.ring-failed { color: var(--error); }
+
+@keyframes device-ring-pending {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-18deg); }
+  75% { transform: rotate(18deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .device-ring-btn.pending {
+    animation: device-ring-pending-fade 0.8s ease-in-out infinite;
+  }
+  @keyframes device-ring-pending-fade {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+}
 
 .device-editor {
   margin: 0 6px 8px; padding: 12px;

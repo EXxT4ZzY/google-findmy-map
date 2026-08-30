@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <title data-i18n="page_title_timeline">FindMy Map – Timeline</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon.ico" sizes="any">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="app.css" />
 <script src="app.js"></script>
@@ -114,17 +116,25 @@ function metres(a, b) {
 
 async function loadDevices() {
   const sel = document.getElementById('device');
-  let state;
+  let devicesBody, locState;
   try {
-    state = await (await fetch('/api/locations')).json();
+    // /api/devices lists every device ever seen (so one that has since
+    // dropped out of the live poll stays reachable here); /api/locations
+    // is only consulted for its per-device pin colour, best-effort.
+    [devicesBody, locState] = await Promise.all([
+      fetch('/api/devices').then(r => r.json()),
+      fetch('/api/locations').then(r => r.json()),
+    ]);
   } catch (e) {
     setStatus(`<span class="error-row">${t('server_unreachable')}</span>`);
     return;
   }
-  const devices = (state.devices || []).slice()
+  for (const d of (locState.devices || [])) {
+    deviceColors.set(d.id, d.color || '#4e9bff');
+  }
+  const devices = (devicesBody.devices || []).slice()
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   for (const d of devices) {
-    deviceColors.set(d.id, d.color || '#4e9bff');
     const opt = document.createElement('option');
     opt.value = d.id;
     opt.textContent = d.name || d.id;
