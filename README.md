@@ -17,20 +17,20 @@ configured GoogleFindMyTools container**: it shares that container's
 
 ## Screenshots
 
-<img src="docs/img/map-dark.jpg" alt="Map view with several devices" width="100%">
+<img src="docs/img/map-dark.jpg" alt="Map view with devices grouped into collapsible sections" width="100%">
 
 <table>
 <tr>
-<td width="50%"><img src="docs/img/timeline.jpg" alt="Timeline: full track and a list of visited places" width="100%"></td>
-<td width="50%"><img src="docs/img/edit-device.jpg" alt="Editing a device's name and pin colour" width="100%"></td>
+<td width="50%"><img src="docs/img/timeline.jpg" alt="Timeline: day/week/month step-through, track, visited places and GPX/GeoJSON/CSV export" width="100%"></td>
+<td width="50%"><img src="docs/img/edit-device.jpg" alt="Editing a device's name, pin colour and group" width="100%"></td>
 </tr>
 <tr>
-<td><img src="docs/img/map-light.jpg" alt="Map view, light theme" width="100%"></td>
-<td align="center"><img src="docs/img/map-mobile.jpg" alt="Mobile layout with the device list as a bottom sheet" height="420"></td>
+<td><img src="docs/img/map-light.jpg" alt="Map view, light theme, with one device group collapsed" width="100%"></td>
+<td align="center"><img src="docs/img/map-mobile.jpg" alt="Mobile layout with the grouped device list as a bottom sheet" height="420"></td>
 </tr>
 </table>
 
-![Clicking through the map and the timeline](docs/img/demo.gif)
+![Clicking through the map, groups, the polling-failure banner and the timeline](docs/img/demo.gif)
 
 <sub>All screenshots use synthetic demo data (fictional devices moving around Berlin), not real location history.</sub>
 
@@ -164,10 +164,13 @@ HTTPS** (see `SECURITY.md`).
   group), geocode cache. New columns are added to an existing DB on
   startup (`_migrate_schema`).
 - `service/colors.py` (pin colour, with validation), `service/augment.py`
-  (track/name/colour per device), `service/visits.py` (clusters points into
-  stays), `service/geocode.py` (reverse geocoding via Nominatim, ≤ 1
-  request/1.1 s, negative cache + backoff).
-- `web/index.html`, `web/timeline.html`, `web/app.css`, `web/app.js`.
+  (track/name/colour/group per device), `service/visits.py` (clusters
+  points into stays), `service/geocode.py` (reverse geocoding via
+  Nominatim, ≤ 1 request/1.1 s, negative cache + backoff),
+  `service/auth.py` (the optional built-in login).
+- `web/index.html` (map), `web/timeline.html`, `web/settings.html`
+  (theme / language / login / data export / old-device deletion),
+  `web/login.html`, `web/app.css`, `web/app.js`.
 
 ## Environment variables
 
