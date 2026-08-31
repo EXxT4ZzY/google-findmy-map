@@ -94,7 +94,7 @@ class TestLastKnownNamePersistence:
     def test_polled_name_is_persisted_for_known_devices(self, store):
         augment_device(geo_device(id="dev-1", name="iPhone"), store, {})
         assert store.known_devices() == [
-            {"id": "dev-1", "name": "iPhone", "last_seen": 2000}
+            {"id": "dev-1", "name": "iPhone", "group": None, "last_seen": 2000, "point_count": 1}
         ]
 
     def test_a_manual_rename_is_not_overwritten_by_the_polled_name(self, store):
@@ -139,3 +139,13 @@ class TestDeviceSettingsOverrides:
         augment_device(device, store, {}, settings=settings)
         augment_device(device, store, {}, settings=settings)
         assert device["default_name"] == "iPhone" and device["name"] == "Backpack"
+
+    def test_group_is_attached_from_settings(self, store):
+        settings = {"dev-1": {"name": None, "color": None, "group": "Familie"}}
+        result = augment_device(geo_device(), store, {}, settings=settings)
+        assert result["group"] == "Familie"
+
+    def test_group_is_none_when_unset(self, store):
+        result = augment_device(geo_device(), store, {},
+                                settings={"dev-1": {"name": None, "color": None}})
+        assert result["group"] is None

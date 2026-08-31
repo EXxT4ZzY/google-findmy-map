@@ -52,18 +52,33 @@ set `GFM_HISTORY_RETENTION_DAYS` if you'd rather it aged out automatically.
 These do **not** replace the reverse-proxy authentication above.
 
 - **Cross-site request blocking.** `POST /api/refresh`,
-  `PUT /api/devices/{id}`, `POST /api/devices/{id}/ring[/stop]`,
-  `POST /api/auth/login` and `PUT /api/settings/auth`
-  reject requests whose `Sec-Fetch-Site` header is
+  `PUT /api/devices/{id}`, `DELETE /api/devices/{id}`,
+  `POST /api/devices/{id}/ring[/stop]`, `POST /api/auth/login` and
+  `PUT /api/settings/auth` reject requests whose `Sec-Fetch-Site` header is
   `cross-site`/`same-site` (Fetch Metadata). This stops a random web page
-  the operator visits from triggering polls, edits, or ringing a device.
-  Non-browser clients (curl, scripts) send no such header and are
+  the operator visits from triggering polls, edits, deletes, or ringing a
+  device. Non-browser clients (curl, scripts) send no such header and are
   unaffected.
+- **Device deletion is id-keyed and can't hit a live device.**
+  `DELETE /api/devices/{id}` resolves the target strictly by the path id
+  (never by display name — two devices renamed to the same name stay
+  independently addressable) and returns 409 while the device is still in
+  the current poll, so its history can't be wiped by mistake and then
+  silently re-accumulated.
 - **Input validation.** Pin colours (from the API and from
   `GFM_DEVICE_COLORS`) must be a plain hex value or CSS colour keyword; SQL
   is fully parameterised; device names, error text and semantic-location
   place names are all HTML-escaped in the frontend before they ever reach
   the DOM.
+- **`GET /api/health` is intentionally public** (reachable without the
+  optional login, for an external uptime monitor). It carries only
+  liveness booleans and `last_poll` — never the polling error string,
+  which stays behind the gate on `/api/locations`.
+- **The export endpoints** (`GET /api/export/history`,
+  `GET /api/export/visits`) are read-only and sit behind the same access
+  boundary as `GET /api/history` / `GET /api/visits` — the auth gate when
+  the optional login is on, the reverse proxy otherwise. They never
+  trigger a geocoding lookup (only already-cached labels are attached).
 - **Reverse-geocoding rate limiting.** The background geocoder makes at
   most one request every ~1.1 s to the configured Nominatim endpoint,
   negatively caches failed lookups, and backs off exponentially on

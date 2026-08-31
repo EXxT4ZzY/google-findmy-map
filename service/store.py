@@ -32,8 +32,10 @@ CREATE TABLE IF NOT EXISTS device_settings (
     device_id       TEXT PRIMARY KEY,
     name            TEXT,   -- NULL: no name override, use the polled name
     color           TEXT,   -- NULL: no colour override, fall back to env/palette
-    last_known_name TEXT    -- last name Google reported for this device, kept
-                             -- even after it drops out of the live poll list
+    last_known_name TEXT,   -- last name Google reported for this device, kept
+                            -- even after it drops out of the live poll list
+    device_group    TEXT    -- NULL: ungrouped. ("group" is a SQL keyword; the
+                            -- API / UI key for this is "group")
 );
 
 CREATE TABLE IF NOT EXISTS geocode_cache (
@@ -60,6 +62,8 @@ def _migrate_schema(conn):
     cols = {row[1] for row in conn.execute("PRAGMA table_info(device_settings)")}
     if "last_known_name" not in cols:
         conn.execute("ALTER TABLE device_settings ADD COLUMN last_known_name TEXT")
+    if "device_group" not in cols:
+        conn.execute("ALTER TABLE device_settings ADD COLUMN device_group TEXT")
 
 
 class LocationStore:
@@ -140,20 +144,44 @@ class LocationStore:
                 log.warning("Could not prune history: %s", exc)
                 return 0
 
-    def set_setting(self, device_id, name=None, color=None):
-        """Upsert a device's display-name / pin-colour override.
+    def delete_device(self, device_id):
+        """Forget a device entirely: its whole location history and its
+        name / colour / group overrides. Returns the number of location
+        fixes removed. The shared geocode cache is coordinate-keyed, not
+        per-device, so it is left alone.
+        """
+        with self._lock:
+            try:
+                cur = self._conn.execute(
+                    "DELETE FROM locations WHERE device_id = ?", (device_id,)
+                )
+                self._conn.execute(
+                    "DELETE FROM device_settings WHERE device_id = ?", (device_id,)
+                )
+                self._conn.commit()
+                return cur.rowcount
+            except sqlite3.Error as exc:
+                log.warning("Could not delete device %r: %s", device_id, exc)
+                return 0
 
-        Empty strings are treated as "no override" and stored as NULL.
+    def set_setting(self, device_id, name=None, color=None, group=None):
+        """Upsert a device's display-name / pin-colour / group override.
+
+        Empty strings are treated as "no override" and stored as NULL. All
+        three columns are (re)written on every call -- the web UI editor
+        always submits the full set.
         """
         name = name or None
         color = color or None
+        group = group or None
         with self._lock:
             try:
                 self._conn.execute(
-                    "INSERT INTO device_settings (device_id, name, color) "
-                    "VALUES (?, ?, ?) "
-                    "ON CONFLICT(device_id) DO UPDATE SET name = ?, color = ?",
-                    (device_id, name, color, name, color),
+                    "INSERT INTO device_settings (device_id, name, color, device_group) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(device_id) DO UPDATE SET "
+                    "name = ?, color = ?, device_group = ?",
+                    (device_id, name, color, group, name, color, group),
                 )
                 self._conn.commit()
             except sqlite3.Error as exc:
@@ -166,12 +194,13 @@ class LocationStore:
                     self._write_warned = True
 
     def get_settings(self):
-        """All device overrides as ``{device_id: {"name": ..., "color": ...}}``."""
+        """All device overrides as
+        ``{device_id: {"name": ..., "color": ..., "group": ...}}``."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT device_id, name, color FROM device_settings"
+                "SELECT device_id, name, color, device_group FROM device_settings"
             ).fetchall()
-        return {r[0]: {"name": r[1], "color": r[2]} for r in rows}
+        return {r[0]: {"name": r[1], "color": r[2], "group": r[3]} for r in rows}
 
     def set_last_seen_name(self, device_id, name):
         """Remember the name Google most recently reported for a device.
@@ -201,7 +230,8 @@ class LocationStore:
                     self._write_warned = True
 
     def known_devices(self):
-        """Every device ever seen: ``[{"id", "name", "last_seen"}, ...]``.
+        """Every device ever seen:
+        ``[{"id", "name", "group", "last_seen", "point_count"}, ...]``.
 
         Includes devices no longer returned by the live poll, as long as
         they have history and/or a remembered name. ``name`` prefers a
@@ -211,20 +241,24 @@ class LocationStore:
         recently seen first.
         """
         with self._lock:
-            last_seen_rows = self._conn.execute(
-                "SELECT device_id, MAX(ts) FROM locations GROUP BY device_id"
+            loc_rows = self._conn.execute(
+                "SELECT device_id, MAX(ts), COUNT(*) FROM locations GROUP BY device_id"
             ).fetchall()
             settings_rows = self._conn.execute(
-                "SELECT device_id, name, last_known_name FROM device_settings"
+                "SELECT device_id, name, last_known_name, device_group FROM device_settings"
             ).fetchall()
-        last_seen = {r[0]: r[1] for r in last_seen_rows}
-        settings = {r[0]: {"name": r[1], "last_known_name": r[2]} for r in settings_rows}
+        last_seen = {r[0]: r[1] for r in loc_rows}
+        counts = {r[0]: r[2] for r in loc_rows}
+        settings = {r[0]: {"name": r[1], "last_known_name": r[2], "group": r[3]}
+                    for r in settings_rows}
         out = []
         for device_id in set(last_seen) | set(settings):
             s = settings.get(device_id, {})
             name = s.get("name") or s.get("last_known_name") or device_id
             out.append({
-                "id": device_id, "name": name, "last_seen": last_seen.get(device_id),
+                "id": device_id, "name": name, "group": s.get("group"),
+                "last_seen": last_seen.get(device_id),
+                "point_count": counts.get(device_id, 0),
             })
         out.sort(key=lambda d: (d["last_seen"] is None, -(d["last_seen"] or 0)))
         return out

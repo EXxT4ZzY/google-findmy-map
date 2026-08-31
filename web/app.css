@@ -32,6 +32,22 @@ body { background: var(--bg); color: var(--text); }
 #app { position: relative; height: 100%; }
 #map { position: absolute; inset: 0; background: var(--bg); }
 
+/* Poll-failure banner: a fixed bar across the top of the map/timeline
+   pages (index.html + timeline.html). When shown, #app is pushed down by
+   the bar's height so nothing is hidden behind it. */
+:root { --alert-h: 34px; }
+.poll-alert {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 1100;
+  height: var(--alert-h); line-height: var(--alert-h);
+  background: var(--error); color: #fff;
+  font-size: 12.5px; font-weight: 600; text-align: center;
+  padding: 0 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+html.has-poll-alert #app {
+  position: absolute; top: var(--alert-h); left: 0; right: 0; bottom: 0;
+  height: auto;
+}
+
 /* Leaflet tweaks */
 .leaflet-container { background: var(--bg); }
 /* In the dark theme, darken the standard (detailed) OSM raster tiles right
@@ -102,8 +118,38 @@ body { background: var(--bg); color: var(--text); }
 }
 .field input::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.6; }
 
+/* Timeline: Day / Week / Month / Range switch + step-through */
+#range-mode { margin-top: 10px; }
+#range-mode button { padding: 7px 4px; font-size: 12px; }
+.anchor-row { display: flex; gap: 6px; align-items: stretch; }
+.anchor-row input { flex: 1; }
+.step-btn {
+  flex: 0 0 34px; min-height: 34px; padding: 0; cursor: pointer;
+  font-size: 18px; line-height: 1;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+.step-btn:hover { background: var(--border); }
+#range-label { font-size: 12px; margin-top: 4px; text-align: center; }
+.visits-more { margin-top: 8px; }
+
 /* Device list (index page) */
 #device-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; }
+.group-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; margin-top: 4px; cursor: pointer;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); user-select: none;
+}
+.group-header:first-child { margin-top: 0; }
+.group-header:hover { color: var(--text); }
+.group-header .caret { font-size: 10px; transition: transform 0.15s; }
+.group-header.collapsed .caret { transform: rotate(-90deg); }
+.group-header .group-name { flex: 1; font-weight: 600; }
+.group-header .group-count {
+  background: var(--panel-2); border-radius: 999px;
+  padding: 1px 7px; font-size: 10px;
+}
 .device {
   display: flex; align-items: flex-start; gap: 10px;
   padding: 10px; border-radius: 8px; cursor: pointer;
@@ -185,6 +231,22 @@ body { background: var(--bg); color: var(--text); }
 .visits-empty {
   font-size: 12px; color: var(--muted); line-height: 1.5; margin: 4px 0 0;
 }
+
+/* Data-export links (timeline + settings) */
+.export { margin-top: 14px; }
+.export h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--muted); margin: 0 0 6px;
+}
+.export-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  font-size: 12px; color: var(--muted); margin: 6px 0;
+}
+.export-row a {
+  color: var(--accent); text-decoration: none; font-weight: 600;
+  padding: 2px 2px;   /* keeps the tap target reasonable on mobile */
+}
+.export-row a:hover { text-decoration: underline; }
 .visit {
   display: flex; gap: 10px; padding: 8px 6px; border-radius: 8px;
   cursor: pointer;
@@ -287,3 +349,26 @@ body { background: var(--bg); color: var(--text); }
 }
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 #auth-msg:not([hidden]) { font-size: 12px; margin-top: 10px; }
+
+.btn-danger { background: var(--error); border-color: var(--error); color: #fff; font-weight: 600; }
+.btn-danger:hover { filter: brightness(1.1); }
+
+/* Old-devices list (settings page) */
+.stale-device {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.stale-device:last-child { border-bottom: none; }
+.stale-meta { flex: 1; min-width: 0; }
+.stale-name { display: block; font-size: 13px; font-weight: 600; }
+.stale-sub { font-size: 11px; color: var(--muted); }
+.stale-id {
+  display: block; margin-top: 3px;
+  font-family: ui-monospace, monospace; font-size: 10.5px;
+  color: var(--muted); word-break: break-all;
+  background: var(--panel-2); padding: 2px 5px; border-radius: 4px;
+}
+.stale-device .btn { width: auto; margin-top: 0; }
+.stale-confirm { flex: 1 1 100%; font-size: 12px; line-height: 1.5; }
+.stale-actions { display: flex; gap: 6px; flex: 1 1 100%; margin-top: 6px; }
+.stale-actions .btn { flex: 1; margin-top: 0; }

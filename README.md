@@ -79,7 +79,20 @@ All other (optional) variables are documented in `.env.example`.
 - Each device has its own pin colour; the last 5 positions are joined by a
   line.
 - **Edit devices:** the ✎ button on each row → change the display name, pick a
-  pin colour from a palette. **Default** clears both overrides.
+  pin colour from a palette, and put the device in a **group** (free text,
+  with suggestions from the groups already in use). **Default** clears all
+  three.
+- **Groups:** once any device has a group, the list is split into collapsible
+  sections ("Familie", "Fahrzeuge", …) with an "Ungrouped" section at the
+  bottom. Collapsing a group also hides its pins from the map — collapsed
+  state is remembered per browser. The timeline's device picker groups the
+  same way (`<optgroup>`).
+- **Old devices:** the settings page lists devices that no longer appear in
+  the poll (still in the timeline picker, gone from the map) and lets you
+  delete one — its whole history and its overrides. The delete is keyed on
+  the device id, never the name, and the confirm step shows the full id, so
+  two devices you happened to rename to the same name stay distinguishable;
+  a device that is still live cannot be deleted.
 - **Ring a device:** the 🔔 button on each row makes it play its "find my
   device" sound; tap again (or wait ~30 s) to stop. The button shakes the
   instant the tap registers — there's a real multi-second FCM round-trip
@@ -89,13 +102,27 @@ All other (optional) variables are documented in `.env.example`.
   without coordinates, e.g. "Home") gets no map pin — Google's API doesn't
   send coordinates for those — but the place name is shown in the device
   list instead of being silently dropped.
-- **Timeline** (`timeline.html`): pick a device and a from/to date → the full
-  track as a line, plus a **list of visited places** (address, arrival–
-  departure, duration) with numbered markers. A visit is only formed when the
-  stored history actually contains several reports from *one* place (radius
-  `GFM_VISIT_RADIUS_M`) spanning at least `GFM_VISIT_MIN_MINUTES` — with a still
-  sparse history a note is shown, and it fills in over time. The device
-  picker lists every device ever seen, not just ones in the current poll.
+- **Polling-failure banner:** a red bar across the top of the map and
+  timeline pages once polling has failed `GFM_POLL_ALERT_AFTER` times in a
+  row (default 3 — an expired `secrets.json`, an upstream break), so you
+  find out without opening the app to check. It clears itself when polling
+  recovers. `GET /api/health` exposes the same state for an external
+  uptime monitor.
+- **Timeline** (`timeline.html`): pick a device, then step through by
+  **Day / Week / Month** with the ‹ › arrows (or pick a free **Range**) →
+  the full track as a line, plus a **list of visited places** (address,
+  arrival–departure, duration) with numbered markers. A visit is only
+  formed when the stored history actually contains several reports from
+  *one* place (radius `GFM_VISIT_RADIUS_M`) spanning at least
+  `GFM_VISIT_MIN_MINUTES` — with a still sparse history a note is shown,
+  and it fills in over time. Long visit lists are capped with a "show
+  more" button so the export controls below stay reachable. The device
+  picker lists every device ever seen, not just ones in the current poll;
+  the chosen view mode + date are remembered per browser.
+- **Export:** the timeline offers **GPX / GeoJSON / CSV** downloads of the
+  track and of the visited places for the chosen device and date range; the
+  settings page has a per-device **full-history** export. For backup, or for
+  QGIS / Google Earth / a script.
 
 ### Authentication
 
@@ -122,13 +149,20 @@ HTTPS** (see `SECURITY.md`).
 - `service/locations.py` uses the library functions but returns structured
   data instead of only printing it.
 - `service/main.py` — FastAPI + a background poll thread. Endpoints:
-  `GET /api/locations` (incl. `palette`), `GET /api/devices` (every device
-  ever seen, for the timeline picker), `GET /api/history`, `GET /api/visits`,
-  `POST /api/refresh`, `PUT /api/devices/{id}`,
-  `POST /api/devices/{id}/ring[/stop]`. The mutating endpoints reject
-  cross-site requests (Fetch Metadata).
+  `GET /api/locations` (incl. `palette` and `poll_alert`), `GET /api/health`
+  (public liveness probe — `{ok, poll_alert, last_poll, …}`, no error
+  detail), `GET /api/devices` (every device ever seen, for the timeline
+  picker, with a `live` flag and `point_count`), `GET /api/history`,
+  `GET /api/visits`, `GET /api/export/history` and `GET /api/export/visits`
+  (`?format=gpx|geojson|csv`, optional `start`/`end`), `POST /api/refresh`,
+  `PUT /api/devices/{id}`, `DELETE /api/devices/{id}` (stale devices only —
+  409 while live), `POST /api/devices/{id}/ring[/stop]`. The mutating
+  endpoints reject cross-site requests (Fetch Metadata).
+- `service/export.py` — the GPX / GeoJSON / CSV formatters (stdlib only).
 - `service/store.py` — SQLite: full history (`add`/`recent`/`range` + a
-  one-time `history.json` migration), device overrides, geocode cache.
+  one-time `history.json` migration), device overrides (name / colour /
+  group), geocode cache. New columns are added to an existing DB on
+  startup (`_migrate_schema`).
 - `service/colors.py` (pin colour, with validation), `service/augment.py`
   (track/name/colour per device), `service/visits.py` (clusters points into
   stays), `service/geocode.py` (reverse geocoding via Nominatim, ≤ 1
@@ -149,6 +183,7 @@ See `.env.example`. Summary:
 | `GFM_GEOCODE_EMAIL` | – | contact email sent as the `email=` parameter (OSM policy) |
 | `GFM_VISIT_RADIUS_M` / `GFM_VISIT_MIN_MINUTES` | `100` / `15` | definition of a "visited place" |
 | `GFM_HISTORY_RETENTION_DAYS` | – | delete location fixes older than this many days; **empty = keep forever** (unchanged default) |
+| `GFM_POLL_ALERT_AFTER` | `3` | show the "updates are failing" banner after this many failed poll cycles in a row; `0` disables it |
 | `GFM_AUTH_DISABLE` | – | `1` forces the optional login off (recovery from a lost password) |
 | `GFM_LOGIN_DELAY_MS` | `500` | fixed delay per login attempt |
 

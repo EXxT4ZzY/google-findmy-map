@@ -156,3 +156,29 @@ README "Web UI" + "Edit devices" bullets. No env var.
   timeline `<optgroup>`s work, flat list unchanged with no groups.
 - Migration: open a pre-Feature-3 `history.db`, confirm `device_group` is
   added on startup without error.
+
+---
+
+## Follow-ups (added during review)
+
+**A. Timeline Day/Week/Month + "show more"** — `web/timeline.html` only.
+`selectedRange()` now derives from a `rangeMode` (`day`/`week`/`month`/
+`range`) + an `anchor` Date, both persisted in `localStorage`. New
+segmented control, ‹ › step buttons, native date input, range label.
+`renderVisits()` caps the list at `VISITS_PAGE = 6` with a "show more"
+button (`visitsExpanded` resets per `show()`); markers are created for all
+visits regardless. Strings `range_day/week/month/custom/prev/next`,
+`visits_show_more` in `app.js`; `.step-btn` / `.anchor-row` in `app.css`.
+
+**B. Delete stale devices** — `LocationStore.delete_device(id) -> int`
+(drops `locations` + `device_settings` rows); `known_devices()` gains
+`point_count`; `GET /api/devices` annotates `live`; new
+`DELETE /api/devices/{id}` (`block_cross_site`, 409 while live, id-keyed
+only). `web/settings.html` "Old devices" section: lists `!live` devices,
+inline (no-popup) confirm that restates the full id. Tests:
+`test_store.py::TestDeleteDevice`, `test_api.py::TestDeleteDevice`,
+`test_real_settings_has_a_stale_device_manager`.
+
+**C. compose wiring** — `docker-compose.yml` now passes the two env vars
+that shipped unwired: `GFM_HISTORY_RETENTION_DAYS` and
+`GFM_POLL_ALERT_AFTER` (default `3`).

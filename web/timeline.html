@@ -11,6 +11,7 @@
 <script src="app.js"></script>
 </head>
 <body>
+<div id="poll-alert" class="poll-alert" hidden></div>
 <div id="app">
   <div id="map"></div>
   <aside id="sidebar">
@@ -27,20 +28,55 @@
         <label for="device" data-i18n="f_device">Device</label>
         <select id="device"></select>
       </div>
-      <div class="field">
-        <label for="from" data-i18n="f_from">From</label>
-        <input type="date" id="from">
+
+      <div class="seg" id="range-mode">
+        <button type="button" data-value="day" data-i18n="range_day">Day</button>
+        <button type="button" data-value="week" data-i18n="range_week">Week</button>
+        <button type="button" data-value="month" data-i18n="range_month">Month</button>
+        <button type="button" data-value="range" data-i18n="range_custom">Range</button>
       </div>
-      <div class="field">
-        <label for="to" data-i18n="f_to">To</label>
-        <input type="date" id="to">
+
+      <div class="field" id="anchor-field">
+        <div class="anchor-row">
+          <button type="button" id="prev-btn" class="step-btn" data-i18n-aria="range_prev" aria-label="Previous">&#8249;</button>
+          <input type="date" id="anchor">
+          <button type="button" id="next-btn" class="step-btn" data-i18n-aria="range_next" aria-label="Next">&#8250;</button>
+        </div>
+        <div id="range-label" class="muted"></div>
       </div>
+
+      <div id="custom-field" hidden>
+        <div class="field">
+          <label for="from" data-i18n="f_from">From</label>
+          <input type="date" id="from">
+        </div>
+        <div class="field">
+          <label for="to" data-i18n="f_to">To</label>
+          <input type="date" id="to">
+        </div>
+      </div>
+
       <button id="show-btn" class="btn btn-primary" type="button" data-i18n="show">Show</button>
       <div id="status" class="muted" style="margin-top: 12px;"></div>
       <div id="visits" class="visits" hidden>
         <h2 data-i18n="visited_places">Visited places</h2>
         <div id="visits-note" class="visits-note"></div>
         <div id="visits-list"></div>
+      </div>
+      <div id="export" class="export" hidden>
+        <h2 data-i18n="s_export">Data export</h2>
+        <div class="export-row">
+          <span data-i18n="export_track">Track</span>
+          <a id="exp-track-gpx" download>GPX</a>
+          <a id="exp-track-geojson" download>GeoJSON</a>
+          <a id="exp-track-csv" download>CSV</a>
+        </div>
+        <div class="export-row" id="export-visits-row" hidden>
+          <span data-i18n="export_visits">Visited places</span>
+          <a id="exp-visits-gpx" download>GPX</a>
+          <a id="exp-visits-geojson" download>GeoJSON</a>
+          <a id="exp-visits-csv" download>CSV</a>
+        </div>
       </div>
     </div>
   </aside>
@@ -58,6 +94,11 @@ const layer = L.layerGroup().addTo(map);
 const visitLayer = L.layerGroup().addTo(map);
 const deviceColors = new Map();
 let visitsRun = 0;   // bumped on each show() so stale geocode retries stop
+
+// The visited-places list is capped so the "Data export" section below it
+// stays reachable without a long scroll. "Show more" expands it in place.
+const VISITS_PAGE = 6;
+let visitsExpanded = false;
 
 const t = (k, v) => window.FindMyMap.t(k, v);
 const loc = () => window.FindMyMap.locale();
@@ -134,21 +175,119 @@ async function loadDevices() {
   }
   const devices = (devicesBody.devices || []).slice()
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  for (const d of devices) {
-    const opt = document.createElement('option');
-    opt.value = d.id;
-    opt.textContent = d.name || d.id;
-    sel.appendChild(opt);
+
+  const named = [...new Set(devices.map(d => d.group).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  const mkOpt = d => {
+    const o = document.createElement('option');
+    o.value = d.id;
+    o.textContent = d.name || d.id;
+    return o;
+  };
+  for (const g of named) {
+    const og = document.createElement('optgroup');
+    og.label = g;
+    for (const d of devices.filter(d => d.group === g)) og.appendChild(mkOpt(d));
+    sel.appendChild(og);
   }
+  for (const d of devices.filter(d => !d.group)) sel.appendChild(mkOpt(d));
+
   if (!devices.length) setStatus(t('no_devices'));
 }
 
+// ---- date range: Day / Week / Month step-through, or a free Range --------
+const RANGE_MODES = ['day', 'week', 'month', 'range'];
+let rangeMode = (() => {
+  try { const v = localStorage.getItem('fmm.rangeMode'); if (RANGE_MODES.includes(v)) return v; } catch (e) {}
+  return 'day';
+})();
+let anchor = (() => {
+  try {
+    const v = localStorage.getItem('fmm.anchor');
+    if (v) { const d = new Date(v + 'T12:00:00'); if (!isNaN(d)) return d; }
+  } catch (e) {}
+  return new Date();
+})();
+
+function persistDateState() {
+  try {
+    localStorage.setItem('fmm.rangeMode', rangeMode);
+    localStorage.setItem('fmm.anchor', toDateInput(anchor));
+  } catch (e) {}
+}
+
 function selectedRange() {
-  const from = document.getElementById('from').value;
-  const to = document.getElementById('to').value;
-  const start = from ? Math.floor(new Date(from + 'T00:00:00').getTime() / 1000) : '';
-  const end = to ? Math.floor(new Date(to + 'T23:59:59').getTime() / 1000) : '';
-  return { start, end };
+  if (rangeMode === 'range') {
+    const from = document.getElementById('from').value;
+    const to = document.getElementById('to').value;
+    return {
+      start: from ? Math.floor(new Date(from + 'T00:00:00').getTime() / 1000) : '',
+      end:   to   ? Math.floor(new Date(to   + 'T23:59:59').getTime() / 1000) : '',
+    };
+  }
+  const s = new Date(anchor), e = new Date(anchor);
+  if (rangeMode === 'week') {
+    const dow = (anchor.getDay() + 6) % 7;   // Mon = 0
+    s.setDate(anchor.getDate() - dow);
+    e.setDate(s.getDate() + 6);
+  } else if (rangeMode === 'month') {
+    s.setDate(1);
+    e.setMonth(anchor.getMonth() + 1, 0);
+  }
+  s.setHours(0, 0, 0, 0);
+  e.setHours(23, 59, 59, 999);
+  return { start: Math.floor(s.getTime() / 1000), end: Math.floor(e.getTime() / 1000) };
+}
+
+function rangeLabel() {
+  const { start, end } = selectedRange();
+  const s = new Date(start * 1000);
+  if (rangeMode === 'day')
+    return s.toLocaleDateString(loc(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  if (rangeMode === 'month')
+    return s.toLocaleDateString(loc(), { month: 'long', year: 'numeric' });
+  const e = new Date(end * 1000), opt = { day: 'numeric', month: 'short' };
+  return `${s.toLocaleDateString(loc(), opt)} – ${e.toLocaleDateString(loc(), opt)}`;
+}
+
+function syncDateInputs() {
+  const custom = rangeMode === 'range';
+  document.getElementById('anchor-field').hidden = custom;
+  document.getElementById('custom-field').hidden = !custom;
+  document.querySelectorAll('#range-mode button').forEach(b =>
+    b.classList.toggle('active', b.dataset.value === rangeMode));
+  if (!custom) {
+    document.getElementById('anchor').value = toDateInput(anchor);
+    document.getElementById('range-label').textContent = rangeLabel();
+  }
+}
+
+function stepRange(dir) {
+  const d = new Date(anchor);
+  if (rangeMode === 'day') d.setDate(d.getDate() + dir);
+  else if (rangeMode === 'week') d.setDate(d.getDate() + 7 * dir);
+  else if (rangeMode === 'month') d.setMonth(d.getMonth() + dir);
+  anchor = d;
+  syncDateInputs();
+  persistDateState();
+  show();
+}
+
+function exportHref(kind, id, start, end, format) {
+  const p = new URLSearchParams({ device: id, format: format });
+  if (start) p.set('start', start);
+  if (end) p.set('end', end);
+  return `/api/export/${kind}?${p}`;
+}
+
+function updateExportLinks(id, start, end, hasTrack) {
+  const box = document.getElementById('export');
+  box.hidden = !(id && hasTrack);
+  if (box.hidden) return;
+  for (const fmt of ['gpx', 'geojson', 'csv']) {
+    document.getElementById('exp-track-' + fmt).href = exportHref('history', id, start, end, fmt);
+    document.getElementById('exp-visits-' + fmt).href = exportHref('visits', id, start, end, fmt);
+  }
 }
 
 async function show() {
@@ -158,10 +297,13 @@ async function show() {
   const btn = document.getElementById('show-btn');
   btn.disabled = true;
   btn.textContent = t('loading_short');
+  visitsExpanded = false;   // collapse the visited-places list for the new query
   const run = ++visitsRun;
   try {
     const url = `/api/history?device=${encodeURIComponent(id)}&start=${start}&end=${end}`;
     const hasTrack = render(await (await fetch(url)).json());
+    updateExportLinks(id, start, end, hasTrack);
+    document.getElementById('export-visits-row').hidden = true;
     if (hasTrack) loadVisits(id, start, end, run, 0);
   } catch (e) {
     setStatus(`<span class="error-row">${t('history_load_error')}</span>`);
@@ -202,6 +344,8 @@ function renderVisits(data) {
   const note = document.getElementById('visits-note');
   note.textContent = data.geocoding ? '' : t('geocoding_disabled');
 
+  document.getElementById('export-visits-row').hidden = !visits.length;
+
   if (!visits.length) {
     const p = document.createElement('p');
     p.className = 'visits-empty';
@@ -209,6 +353,8 @@ function renderVisits(data) {
     list.appendChild(p);
     return;
   }
+
+  const shown = visitsExpanded ? visits.length : Math.min(VISITS_PAGE, visits.length);
 
   visits.forEach((v, i) => {
     const n = i + 1;
@@ -220,6 +366,15 @@ function renderVisits(data) {
       ? `${fmtDay(v.start)}, ${fmtClock(v.start)}–${fmtClock(v.end)}`
       : `${fmtDay(v.start)} ${fmtClock(v.start)} – ${fmtDay(v.end)} ${fmtClock(v.end)}`;
 
+    // Every visit keeps its numbered map marker; only the *list* is capped.
+    const marker = L.marker([v.lat, v.lon], {
+      icon: L.divIcon({ className: 'visit-marker', html: `<span>${n}</span>`,
+        iconSize: [24, 24], iconAnchor: [12, 12] }),
+    }).addTo(visitLayer).bindPopup(
+      `<b>${n}. ${escapeHtml(v.label || place)}</b><br>${when}<br>${fmtDuration(v.end - v.start)}`);
+
+    if (i >= shown) return;
+
     const row = document.createElement('div');
     row.className = 'visit';
     row.innerHTML = `
@@ -229,13 +384,6 @@ function renderVisits(data) {
           pending ? t('resolving_address') : escapeHtml(place)}</span>
         <span class="visit-when">${when} · ${fmtDuration(v.end - v.start)}</span>
       </span>`;
-
-    const marker = L.marker([v.lat, v.lon], {
-      icon: L.divIcon({ className: 'visit-marker', html: `<span>${n}</span>`,
-        iconSize: [24, 24], iconAnchor: [12, 12] }),
-    }).addTo(visitLayer).bindPopup(
-      `<b>${n}. ${escapeHtml(v.label || place)}</b><br>${when}<br>${fmtDuration(v.end - v.start)}`);
-
     row.addEventListener('click', () => {
       map.flyTo([v.lat, v.lon], Math.max(map.getZoom(), 16));
       marker.openPopup();
@@ -245,6 +393,15 @@ function renderVisits(data) {
     });
     list.appendChild(row);
   });
+
+  if (visits.length > shown) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'btn btn-small visits-more';
+    more.textContent = t('visits_show_more', { n: visits.length - shown });
+    more.addEventListener('click', () => { visitsExpanded = true; renderVisits(data); });
+    list.appendChild(more);
+  }
 }
 
 function render(data) {
@@ -290,17 +447,48 @@ document.getElementById('from').value = toDateInput(new Date(Date.now() - 7 * 24
 
 document.getElementById('show-btn').addEventListener('click', show);
 document.getElementById('device').addEventListener('change', show);
+document.getElementById('range-mode').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || b.dataset.value === rangeMode) return;
+  rangeMode = b.dataset.value;
+  syncDateInputs();
+  persistDateState();
+  show();
+});
+document.getElementById('prev-btn').addEventListener('click', () => stepRange(-1));
+document.getElementById('next-btn').addEventListener('click', () => stepRange(1));
+document.getElementById('anchor').addEventListener('change', (e) => {
+  const d = new Date(e.target.value + 'T12:00:00');
+  if (isNaN(d)) return;
+  anchor = d;
+  syncDateInputs();
+  persistDateState();
+  show();
+});
 document.getElementById('sheet-toggle').addEventListener('click', () => {
   document.getElementById('sidebar').classList.toggle('collapsed');
   setTimeout(() => map.invalidateSize(), 300);
 });
 
+// The timeline page has no data poll of its own -- ping the public health
+// probe so the poll-failure banner shows here too.
+async function pollHealth() {
+  try {
+    window.FindMyMap.renderPollAlert(await (await fetch('/api/health')).json());
+  } catch (e) { /* leave the banner as-is if the probe is unreachable */ }
+}
+
 // Re-render the current view when the language changes (labels come via t()).
 window.FindMyMap.onLangChange = () => {
+  syncDateInputs();
   if (document.getElementById('device').value) show();
+  pollHealth();
 };
 
+syncDateInputs();
 loadDevices().then(show);
+pollHealth();
+setInterval(pollHealth, 30000);
 </script>
 </body>
 </html>

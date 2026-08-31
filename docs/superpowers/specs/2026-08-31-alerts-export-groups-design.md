@@ -121,3 +121,29 @@ them ("Familie", "Fahrzeuge", …).
 
 Per-group colours or icons; drag-and-drop reordering; group-level ring /
 export actions.
+
+---
+
+## Follow-ups (added during review)
+
+### Timeline: Day / Week / Month step-through + "show more"
+
+The free From/To range is kept as a "Range" mode, but the default is now a
+**Day / Week / Month** segmented control with ‹ › arrows that step the
+anchor date, a native date picker, and a human range label — closer to how
+Google Maps' timeline is driven. The mode and anchor date persist per
+browser (`localStorage`). The visited-places list is capped at 6 entries
+with a "show more" button so the export controls below it stay on screen;
+every visit still gets its numbered map marker regardless of the cap.
+
+### Settings: delete stale devices
+
+The settings page lists devices that are in `known_devices()` but not in
+the current poll (`/api/devices` now carries a `live` flag and
+`point_count`). Each can be deleted via `DELETE /api/devices/{id}` —
+`LocationStore.delete_device()` drops the device's `locations` rows and its
+`device_settings` row. Two safeguards by design: the endpoint refuses (409)
+while the device is still live, and it resolves the target **only** by the
+path id — never by display name — so two devices the operator renamed to
+the same name stay independently deletable. The confirm step is inline (no
+popup) and restates the full device id.

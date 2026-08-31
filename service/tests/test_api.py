@@ -1,10 +1,12 @@
 """End-to-end checks for the HTTP API, with the heavy vendored
 ``locations`` module stubbed out."""
 
+import json
 import pathlib
 import sys
 import time
 import types
+from xml.etree import ElementTree
 
 import pytest
 
@@ -33,7 +35,8 @@ def _build_client(tmp_path, monkeypatch, env=None):
     for key, value in (env or {}).items():
         monkeypatch.setenv(key, value)
 
-    for mod in ("main", "auth", "augment", "store", "colors", "visits", "geocode"):
+    for mod in ("main", "auth", "augment", "store", "colors", "visits",
+                "geocode", "export"):
         monkeypatch.delitem(sys.modules, mod, raising=False)
     import main
 
@@ -137,7 +140,8 @@ def test_update_device_sets_name_and_colour(client):
 
 def test_update_device_persists_to_the_store(client):
     client.put("/api/devices/dev-9", json={"name": "X", "color": "#abcdef"})
-    assert client._main._store.get_settings()["dev-9"] == {"name": "X", "color": "#abcdef"}
+    assert client._main._store.get_settings()["dev-9"] == {
+        "name": "X", "color": "#abcdef", "group": None}
 
 
 def test_clearing_settings_restores_the_defaults(client):
@@ -219,6 +223,94 @@ def test_devices_endpoint_sorts_most_recently_seen_first(client):
     assert [d["id"] for d in devices] == ["dev-new", "dev-old"]
 
 
+class TestDeviceGroups:
+    def test_group_is_persisted_and_echoed(self, client):
+        _seed_one_device(client._main, id="dev-1")
+        r = client.put("/api/devices/dev-1",
+                       json={"name": "", "color": "", "group": "Familie"})
+        assert r.status_code == 200
+        assert r.json()["settings"]["group"] == "Familie"
+        assert _device(client)["group"] == "Familie"
+
+    def test_group_is_trimmed_and_capped(self, client):
+        _seed_one_device(client._main, id="dev-1")
+        client.put("/api/devices/dev-1",
+                   json={"name": "", "color": "", "group": "  " + "x" * 60 + "  "})
+        assert len(_device(client)["group"]) == 40
+
+    def test_group_appears_on_the_devices_endpoint(self, client):
+        _seed_one_device(client._main, id="dev-1")
+        client.put("/api/devices/dev-1", json={"name": "", "color": "", "group": "Fahrzeuge"})
+        dev = next(d for d in client.get("/api/devices").json()["devices"] if d["id"] == "dev-1")
+        assert dev["group"] == "Fahrzeuge"
+
+    def test_no_group_is_null_everywhere(self, client):
+        _seed_one_device(client._main, id="dev-1")
+        assert _device(client)["group"] is None
+        dev = next(d for d in client.get("/api/devices").json()["devices"] if d["id"] == "dev-1")
+        assert dev["group"] is None
+
+
+class TestDeleteDevice:
+    def _stale_device(self, main, id="dev-old"):
+        for t in (1_000, 2_000, 3_000):
+            main._store.add(id, {"latitude": 52.5, "longitude": 13.4, "time": t, "accuracy": 5})
+        main._store.set_setting(id, name="Retired Tag")
+        # not in _state["devices"] -> stale
+
+    def test_devices_endpoint_flags_live_vs_stale(self, client):
+        main = client._main
+        _seed_one_device(main, id="dev-live")     # goes into _state["devices"]
+        self._stale_device(main, id="dev-old")
+        by_id = {d["id"]: d for d in client.get("/api/devices").json()["devices"]}
+        assert by_id["dev-live"]["live"] is True
+        assert by_id["dev-old"]["live"] is False
+        assert by_id["dev-old"]["point_count"] == 3
+
+    def test_deletes_a_stale_device_and_its_history(self, client):
+        main = client._main
+        self._stale_device(main, id="dev-old")
+        r = client.request("DELETE", "/api/devices/dev-old")
+        assert r.status_code == 200
+        assert r.json() == {"deleted": "dev-old", "points": 3}
+        assert not any(d["id"] == "dev-old"
+                       for d in client.get("/api/devices").json()["devices"])
+        assert main._store.range("dev-old", 0, 9999) == []
+
+    def test_refuses_to_delete_a_live_device(self, client):
+        main = client._main
+        _seed_one_device(main, id="dev-live", name="Phone")
+        main._store.add("dev-live", {"latitude": 1, "longitude": 2, "time": 5, "accuracy": 1})
+        r = client.request("DELETE", "/api/devices/dev-live")
+        assert r.status_code == 409
+        assert main._store.range("dev-live", 0, 9999) != []   # history untouched
+
+    def test_delete_is_keyed_on_id_not_name_for_same_named_devices(self, client):
+        """Two devices renamed to the same display name stay independently
+        deletable -- the id in the path is the only thing that matters."""
+        main = client._main
+        for did in ("dev-a", "dev-b"):
+            for t in (1, 2):
+                main._store.add(did, {"latitude": 1, "longitude": 2, "time": t, "accuracy": 1})
+            main._store.set_setting(did, name="Backpack")
+
+        client.request("DELETE", "/api/devices/dev-a")
+
+        remaining = client.get("/api/devices").json()["devices"]
+        assert [d["id"] for d in remaining] == ["dev-b"]
+        assert remaining[0]["name"] == "Backpack"      # dev-b, untouched
+
+    def test_deleting_an_unknown_device_is_a_noop_200(self, client):
+        r = client.request("DELETE", "/api/devices/never-existed")
+        assert r.status_code == 200 and r.json()["points"] == 0
+
+    def test_delete_is_blocked_cross_site(self, client):
+        self._stale_device(client._main, id="dev-old")
+        r = client.request("DELETE", "/api/devices/dev-old",
+                           headers={"sec-fetch-site": "cross-site"})
+        assert r.status_code == 403
+
+
 def test_semantic_location_does_not_clobber_the_device_name(client):
     """Regression test for the locations.py bug this feature fixed: merging
     a semantic-only fix into the device entry must not overwrite its name."""
@@ -263,6 +355,128 @@ def test_history_retention_disabled_by_default(client):
     main._store.add("dev-1", {"latitude": 1, "longitude": 1, "time": now - 3650 * 86400})
     main._maybe_prune_history()
     assert len(main._store.range("dev-1", 0, now + 1)) == 1
+
+
+def _raiser(exc):
+    def _f():
+        raise exc
+    return _f
+
+
+class TestPollAlert:
+    def test_alert_only_after_the_threshold_of_consecutive_failures(self, client):
+        main = client._main
+        main.locations.poll_all_devices = _raiser(RuntimeError("token expired"))
+        main._state["consecutive_failures"] = 0
+
+        main._run_poll_cycle()
+        main._run_poll_cycle()
+        assert client.get("/api/locations").json()["poll_alert"] is False
+        assert client.get("/api/health").json()["poll_alert"] is False
+
+        main._run_poll_cycle()  # 3rd in a row
+        body = client.get("/api/locations").json()
+        assert body["poll_alert"] is True
+        assert body["consecutive_failures"] == 3
+        assert "token expired" in body["last_error"]
+        assert body["poll_interval_seconds"] == main.POLL_INTERVAL_SECONDS
+
+        health = client.get("/api/health").json()
+        assert health == {
+            "ok": False, "poll_alert": True, "poll_stale": False,
+            "last_poll": main._state["last_poll"], "consecutive_failures": 3,
+            "poll_interval_seconds": main.POLL_INTERVAL_SECONDS,
+        }
+        assert "last_error" not in health   # never on the public probe
+
+    def test_a_good_cycle_clears_the_alert(self, client):
+        main = client._main
+        main.locations.poll_all_devices = _raiser(RuntimeError("boom"))
+        main._state["consecutive_failures"] = 0
+        for _ in range(3):
+            main._run_poll_cycle()
+        assert client.get("/api/health").json()["poll_alert"] is True
+
+        main.locations.poll_all_devices = lambda: []   # empty account = healthy
+        main._run_poll_cycle()
+        body = client.get("/api/locations").json()
+        assert body["poll_alert"] is False
+        assert body["consecutive_failures"] == 0
+        assert body["last_error"] is None
+
+    def test_every_device_errored_counts_as_a_failure_without_advancing_last_poll(self, client):
+        main = client._main
+        main.locations.poll_all_devices = lambda: [
+            {"id": "d1", "name": "A", "error": "fetch_failed"},
+            {"id": "d2", "name": "B", "error": "no_response"},
+        ]
+        main._state["consecutive_failures"] = 0
+        before = main._state["last_poll"]
+        for _ in range(3):
+            main._run_poll_cycle()
+        body = client.get("/api/locations").json()
+        assert body["poll_alert"] is True
+        assert body["last_error"] == "every device reported an error"
+        assert main._state["last_poll"] == before
+
+    def test_a_partial_failure_does_not_alert(self, client):
+        main = client._main
+        main.locations.poll_all_devices = lambda: [
+            {"id": "d1", "name": "A", "type": "geo",
+             "latitude": 1, "longitude": 2, "time": 5, "accuracy": 3},
+            {"id": "d2", "name": "B", "error": "no_response"},
+        ]
+        main._state["consecutive_failures"] = 0
+        for _ in range(5):
+            main._run_poll_cycle()
+        body = client.get("/api/locations").json()
+        assert body["poll_alert"] is False
+        assert body["consecutive_failures"] == 0
+
+    def test_systemexit_from_the_vendored_lib_is_caught(self, client):
+        main = client._main
+        main.locations.poll_all_devices = _raiser(SystemExit(1))
+        main._state["consecutive_failures"] = 0
+        assert main._run_poll_cycle() is False   # no SystemExit escapes
+        assert main._state["consecutive_failures"] == 1
+        assert main._state["last_error"]
+
+    def test_threshold_is_configurable(self, make_client):
+        c = make_client(GFM_POLL_ALERT_AFTER="1")
+        with c:
+            main = c._main
+            main.locations.poll_all_devices = _raiser(RuntimeError("x"))
+            main._state["consecutive_failures"] = 0
+            main._run_poll_cycle()
+            assert c.get("/api/health").json()["poll_alert"] is True
+
+    def test_zero_threshold_disables_the_alert(self, make_client):
+        c = make_client(GFM_POLL_ALERT_AFTER="0")
+        with c:
+            main = c._main
+            main.locations.poll_all_devices = _raiser(RuntimeError("x"))
+            main._state["consecutive_failures"] = 0
+            for _ in range(10):
+                main._run_poll_cycle()
+            assert c.get("/api/health").json()["poll_alert"] is False
+
+    def test_stale_last_poll_alerts_even_without_a_failure_streak(self, client):
+        """A hung poll thread never bumps the failure counter -- last_poll
+        just stops advancing. The stale check catches that."""
+        main = client._main
+        main._state["consecutive_failures"] = 0
+        main._state["last_poll"] = int(time.time()) - 24 * 3600   # a day ago
+        health = client.get("/api/health").json()
+        assert health["poll_alert"] is False
+        assert health["poll_stale"] is True
+        assert health["ok"] is False
+        assert client.get("/api/locations").json()["poll_stale"] is True
+
+    def test_never_having_polled_is_not_flagged_stale(self, client):
+        main = client._main
+        main._state["consecutive_failures"] = 0
+        main._state["last_poll"] = None
+        assert client.get("/api/health").json()["poll_stale"] is False
 
 
 def test_read_endpoints_are_not_blocked_cross_site(client):
@@ -319,6 +533,100 @@ def test_visits_endpoint_queues_uncached_coords_when_geocoding_is_on(client):
                                               "start": 0, "end": 2_000_000}).json()
     assert body2["visits"][0]["label"] == "Place"
     assert body2["pending"] == 0
+
+
+class TestExport:
+    def _seed(self, store):
+        for i in range(4):
+            store.add("dev-1", {"latitude": 52.5 + i * 1e-4, "longitude": 13.4,
+                                "time": 1_700_000_000 + i * 60, "accuracy": 5})
+
+    def test_history_gpx_download(self, client):
+        self._seed(client._main._store)
+        client.put("/api/devices/dev-1", json={"name": "Peter's Phone"})
+        r = client.get("/api/export/history",
+                       params={"device": "dev-1", "format": "gpx"})
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/gpx+xml")
+        assert r.headers["content-disposition"] == \
+            'attachment; filename="Peter-s-Phone-history.gpx"'
+        root = ElementTree.fromstring(r.text)
+        ns = "{http://www.topografix.com/GPX/1/1}"
+        assert len(root.findall(f"{ns}trk/{ns}trkseg/{ns}trkpt")) == 4
+
+    def test_history_csv_and_geojson_content_types(self, client):
+        self._seed(client._main._store)
+        csv_r = client.get("/api/export/history",
+                           params={"device": "dev-1", "format": "csv"})
+        assert csv_r.headers["content-type"].startswith("text/csv")
+        assert csv_r.text.splitlines()[0].startswith("time_iso,")
+
+        gj = client.get("/api/export/history",
+                        params={"device": "dev-1", "format": "geojson"})
+        assert gj.headers["content-type"] == "application/geo+json"
+        assert json.loads(gj.text)["features"][0]["geometry"]["type"] == "LineString"
+
+    def test_range_is_applied_and_reflected_in_the_filename(self, client):
+        self._seed(client._main._store)
+        r = client.get("/api/export/history", params={
+            "device": "dev-1", "format": "csv",
+            "start": 1_700_000_030, "end": 1_700_000_150,
+        })
+        rows = r.text.splitlines()
+        assert len(rows) == 1 + 2   # header + the two points inside the window
+        assert r.headers["content-disposition"] == \
+            'attachment; filename="dev-1-history-1700000030-1700000150.csv"'
+
+    def test_no_range_exports_the_full_history(self, client):
+        self._seed(client._main._store)
+        r = client.get("/api/export/history",
+                       params={"device": "dev-1", "format": "csv"})
+        assert len(r.text.splitlines()) == 1 + 4
+        assert "-history.csv" in r.headers["content-disposition"]
+
+    def test_bad_format_is_422(self, client):
+        r = client.get("/api/export/history",
+                       params={"device": "dev-1", "format": "kml"})
+        assert r.status_code == 422
+
+    def test_unknown_device_is_an_empty_file_not_404(self, client):
+        r = client.get("/api/export/history",
+                       params={"device": "ghost", "format": "csv"})
+        assert r.status_code == 200
+        assert r.text.splitlines() == ["time_iso,time_unix,latitude,longitude,accuracy"]
+
+    def test_visits_export_uses_only_cached_labels(self, client):
+        main = client._main
+        _seed_stay(main._store)
+        found = __import__("visits").detect_visits(
+            main._store.range("dev-1", 0, 2_000_000),
+            main.VISIT_RADIUS_M, main.VISIT_MIN_SECONDS,
+        )
+        main._store.geocode_put(found[0]["lat"], found[0]["lon"], "Home", "Home, Berlin")
+
+        r = client.get("/api/export/visits",
+                       params={"device": "dev-1", "format": "geojson"})
+        assert r.status_code == 200
+        feats = json.loads(r.text)["features"]
+        assert feats[0]["properties"]["label"] == "Home"
+        assert main._geocoder.pending_count == 0   # never enqueued a lookup
+
+    def test_visits_export_gpx_and_csv(self, client):
+        _seed_stay(client._main._store)
+        gpx = client.get("/api/export/visits",
+                         params={"device": "dev-1", "format": "gpx"})
+        assert gpx.headers["content-type"].startswith("application/gpx+xml")
+        ElementTree.fromstring(gpx.text)   # parses
+        csv_r = client.get("/api/export/visits",
+                           params={"device": "dev-1", "format": "csv"})
+        assert csv_r.text.splitlines()[0].startswith("start_iso,")
+
+    def test_export_endpoints_are_not_blocked_cross_site(self, client):
+        self._seed(client._main._store)
+        r = client.get("/api/export/history",
+                       params={"device": "dev-1", "format": "csv"},
+                       headers={"sec-fetch-site": "cross-site"})
+        assert r.status_code == 200   # GET, read-only -- same as /api/history
 
 
 class TestStaticPages:
@@ -632,3 +940,59 @@ def test_real_ring_button_gives_instant_no_popup_feedback():
 def test_real_timeline_lists_devices_from_the_devices_endpoint():
     html = (pathlib.Path(__file__).parents[2] / "web" / "timeline.html").read_text()
     assert "fetch('/api/devices')" in html
+
+
+def test_real_pages_carry_the_poll_alert_banner():
+    web_dir = pathlib.Path(__file__).parents[2] / "web"
+    for page in ("index.html", "timeline.html"):
+        assert 'id="poll-alert"' in (web_dir / page).read_text()
+    assert ".poll-alert" in (web_dir / "app.css").read_text()
+    assert "renderPollAlert" in (web_dir / "app.js").read_text()
+
+
+def test_real_export_links_are_wired_in_the_frontend():
+    web_dir = pathlib.Path(__file__).parents[2] / "web"
+    timeline = (web_dir / "timeline.html").read_text()
+    assert 'id="export"' in timeline
+    assert "/api/export/" in timeline
+    assert 'id="exp-track-gpx"' in timeline and 'id="exp-visits-csv"' in timeline
+    settings = (web_dir / "settings.html").read_text()
+    assert 'id="export-device"' in settings
+    assert "/api/export/history" in settings
+
+
+def test_real_settings_has_a_stale_device_manager():
+    settings = (pathlib.Path(__file__).parents[2] / "web" / "settings.html").read_text()
+    assert 'id="stale-devices"' in settings
+    assert "method: 'DELETE'" in settings
+    assert "d.live" in settings                 # only stale devices are listed
+    assert "dev_confirm_q" in settings          # inline confirm step, no popup
+    assert "alert(" not in settings and "confirm(" not in settings
+    app_js = (pathlib.Path(__file__).parents[2] / "web" / "app.js").read_text()
+    assert "s_devices:" in app_js and "Alte Geräte" in app_js
+
+
+def test_real_device_grouping_is_wired_in_the_frontend():
+    web_dir = pathlib.Path(__file__).parents[2] / "web"
+    index = (web_dir / "index.html").read_text()
+    assert 'id="fmm-groups"' in index          # editor datalist
+    assert "collapsedGroups" in index          # collapsible + map filter
+    assert "fmm.collapsedGroups" in index      # persisted per browser
+    timeline = (web_dir / "timeline.html").read_text()
+    assert "optgroup" in timeline
+    app_js = (web_dir / "app.js").read_text()
+    assert "f_group:" in app_js and "Gruppe" in app_js
+    assert ".group-header" in (web_dir / "app.css").read_text()
+
+
+def test_real_timeline_has_day_week_month_range_and_visits_paging():
+    web_dir = pathlib.Path(__file__).parents[2] / "web"
+    timeline = (web_dir / "timeline.html").read_text()
+    assert 'id="range-mode"' in timeline
+    for v in ('"day"', '"week"', '"month"', '"range"'):
+        assert f'data-value={v}' in timeline
+    assert 'id="prev-btn"' in timeline and 'id="anchor"' in timeline
+    assert "fmm.rangeMode" in timeline and "fmm.anchor" in timeline
+    assert "VISITS_PAGE" in timeline and "visitsExpanded" in timeline
+    app_js = (web_dir / "app.js").read_text()
+    assert "range_month:" in app_js and "visits_show_more:" in app_js

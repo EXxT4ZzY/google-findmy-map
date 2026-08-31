@@ -9,6 +9,10 @@
       toggle_sheet: 'Collapse / expand panel',
       unknown: 'unknown',
 
+      // poll-failure banner (both pages)
+      poll_alert: 'Location updates are failing. Last successful update: {last}.',
+      poll_alert_stale: 'No location update in a long time. Last successful update: {last}.',
+
       // index page
       app_title: 'FindMy Map',
       loading: 'Loading…',
@@ -37,6 +41,8 @@
       no: 'no',
       f_name: 'Name',
       f_pin_color: 'Pin colour',
+      f_group: 'Group',
+      ungrouped: 'Ungrouped',
       save: 'Save',
       cancel: 'Cancel',
       reset_default: 'Default',
@@ -48,6 +54,13 @@
       f_device: 'Device',
       f_from: 'From',
       f_to: 'To',
+      range_day: 'Day',
+      range_week: 'Week',
+      range_month: 'Month',
+      range_custom: 'Range',
+      range_prev: 'Previous',
+      range_next: 'Next',
+      visits_show_more: 'Show {n} more',
       show: 'Show',
       loading_short: 'Loading…',
       visited_places: 'Visited places',
@@ -63,6 +76,10 @@
         + 'Once more location data has accumulated, visited places will appear here.',
       unit_min: 'min',
       unit_hour: 'h',
+      s_export: 'Data export',
+      export_track: 'Track',
+      export_visits: 'Visited places',
+      export_hint_full: 'The complete history for this device (GPX / GeoJSON / CSV).',
 
       // login page
       page_title_login: 'FindMy Map – Sign in',
@@ -95,10 +112,21 @@
       err_pw_mismatch: 'The passwords do not match.',
       err_current_pw: 'Current password is incorrect.',
       err_username_required: 'Username is required.',
+      s_devices: 'Old devices',
+      dev_stale_hint: 'Devices that no longer appear on the map. Deleting one removes its whole history and settings — it cannot be undone.',
+      dev_never_seen: 'never seen',
+      dev_points: '{n} points',
+      dev_delete: 'Delete',
+      dev_confirm_q: 'Permanently delete “{name}” and its {n} location points? Check the id below — this cannot be undone.',
+      dev_confirm_go: 'Delete',
+      dev_none: 'No old devices — every device is still active.',
     },
     de: {
       toggle_sheet: 'Panel ein-/ausklappen',
       unknown: 'unbekannt',
+
+      poll_alert: 'Standortabruf schlägt fehl. Letzte erfolgreiche Aktualisierung: {last}.',
+      poll_alert_stale: 'Seit Langem keine Standortaktualisierung. Letzte erfolgreiche Aktualisierung: {last}.',
 
       app_title: 'FindMy Map',
       loading: 'Lade…',
@@ -127,6 +155,8 @@
       no: 'nein',
       f_name: 'Name',
       f_pin_color: 'Pin-Farbe',
+      f_group: 'Gruppe',
+      ungrouped: 'Ohne Gruppe',
       save: 'Speichern',
       cancel: 'Abbrechen',
       reset_default: 'Standard',
@@ -137,6 +167,13 @@
       f_device: 'Gerät',
       f_from: 'Von',
       f_to: 'Bis',
+      range_day: 'Tag',
+      range_week: 'Woche',
+      range_month: 'Monat',
+      range_custom: 'Zeitraum',
+      range_prev: 'Zurück',
+      range_next: 'Weiter',
+      visits_show_more: '{n} weitere anzeigen',
       show: 'Anzeigen',
       loading_short: 'Lädt…',
       visited_places: 'Besuchte Orte',
@@ -152,6 +189,10 @@
         + 'Sobald sich mehr Standortdaten angesammelt haben, erscheinen hier die besuchten Orte.',
       unit_min: 'Min',
       unit_hour: 'Std',
+      s_export: 'Datenexport',
+      export_track: 'Track',
+      export_visits: 'Besuchte Orte',
+      export_hint_full: 'Der komplette Verlauf dieses Geräts (GPX / GeoJSON / CSV).',
 
       // login page
       page_title_login: 'FindMy Map – Anmelden',
@@ -184,6 +225,14 @@
       err_pw_mismatch: 'Die Passwörter stimmen nicht überein.',
       err_current_pw: 'Aktuelles Passwort ist falsch.',
       err_username_required: 'Benutzername ist erforderlich.',
+      s_devices: 'Alte Geräte',
+      dev_stale_hint: 'Geräte, die nicht mehr auf der Karte erscheinen. Beim Löschen werden der gesamte Verlauf und die Einstellungen entfernt — das lässt sich nicht rückgängig machen.',
+      dev_never_seen: 'nie gesehen',
+      dev_points: '{n} Punkte',
+      dev_delete: 'Löschen',
+      dev_confirm_q: '„{name}“ mit {n} Standortpunkten endgültig löschen? Prüfe die ID unten — das lässt sich nicht rückgängig machen.',
+      dev_confirm_go: 'Löschen',
+      dev_none: 'Keine alten Geräte — alle Geräte sind noch aktiv.',
     },
   };
 
@@ -245,10 +294,38 @@
     }
   }
 
+  // ---- poll-failure banner (shared by index.html + timeline.html) -----
+  // `info` is the /api/locations payload on index (has last_error) or the
+  // /api/health payload on timeline (no error string). Both carry
+  // poll_alert / poll_stale / last_poll.
+  function renderPollAlert(info) {
+    var el = document.getElementById('poll-alert');
+    if (!el) return;
+    info = info || {};
+    var alert = info.poll_alert === true;
+    var stale = info.poll_stale === true;
+    var root = document.documentElement;
+    if (!alert && !stale) {
+      el.hidden = true;
+      root.classList.remove('has-poll-alert');
+      return;
+    }
+    var last = info.last_poll
+      ? new Date(info.last_poll * 1000).toLocaleString(locale())
+      : t('never');
+    var msg = t(stale && !alert ? 'poll_alert_stale' : 'poll_alert', { last: last });
+    if (info.last_error) msg += ' (' + String(info.last_error).slice(0, 200) + ')';
+    el.textContent = msg;   // textContent -- last_error is never treated as HTML
+    el.title = msg;         // full text on hover; the bar itself truncates
+    el.hidden = false;
+    root.classList.add('has-poll-alert');
+  }
+
   // ---- public API + wiring ------------------------------------------
   window.FindMyMap = window.FindMyMap || {};
   window.FindMyMap.t = t;
   window.FindMyMap.locale = locale;
+  window.FindMyMap.renderPollAlert = renderPollAlert;
   window.FindMyMap.getLang = function () { return lang; };
   window.FindMyMap.onThemeChange = null;
   window.FindMyMap.onLangChange = null;

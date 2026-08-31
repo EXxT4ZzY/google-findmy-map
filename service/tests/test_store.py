@@ -125,17 +125,20 @@ class TestDeviceSettings:
 
     def test_set_and_read_back_a_name_and_colour(self, store):
         store.set_setting("dev", name="Car", color="#ff0000")
-        assert store.get_settings() == {"dev": {"name": "Car", "color": "#ff0000"}}
+        assert store.get_settings() == {
+            "dev": {"name": "Car", "color": "#ff0000", "group": None}}
 
     def test_setting_is_upserted_not_duplicated(self, store):
         store.set_setting("dev", name="A", color="#111111")
         store.set_setting("dev", name="B", color="#222222")
-        assert store.get_settings() == {"dev": {"name": "B", "color": "#222222"}}
+        assert store.get_settings() == {
+            "dev": {"name": "B", "color": "#222222", "group": None}}
 
     def test_empty_values_are_stored_as_no_override(self, store):
         store.set_setting("dev", name="A", color="#111111")
         store.set_setting("dev", name="", color="")
-        assert store.get_settings() == {"dev": {"name": None, "color": None}}
+        assert store.get_settings() == {
+            "dev": {"name": None, "color": None, "group": None}}
 
     def test_settings_survive_reopen(self, tmp_path):
         path = tmp_path / "history.db"
@@ -143,7 +146,8 @@ class TestDeviceSettings:
         first.set_setting("dev", name="Car", color="#00ff00")
         first.close()
         second = LocationStore(path)
-        assert second.get_settings() == {"dev": {"name": "Car", "color": "#00ff00"}}
+        assert second.get_settings() == {
+            "dev": {"name": "Car", "color": "#00ff00", "group": None}}
         second.close()
 
 
@@ -153,13 +157,15 @@ class TestKnownDevices:
 
     def test_a_device_with_history_but_no_settings_row(self, store):
         store.add("dev", pt(time=1000))
-        assert store.known_devices() == [{"id": "dev", "name": "dev", "last_seen": 1000}]
+        assert store.known_devices() == [
+            {"id": "dev", "name": "dev", "group": None, "last_seen": 1000, "point_count": 1}
+        ]
 
     def test_last_known_name_is_used_as_a_fallback(self, store):
         store.add("dev", pt(time=1000))
         store.set_last_seen_name("dev", "iPhone")
         assert store.known_devices() == [
-            {"id": "dev", "name": "iPhone", "last_seen": 1000}
+            {"id": "dev", "name": "iPhone", "group": None, "last_seen": 1000, "point_count": 1}
         ]
 
     def test_manual_rename_takes_priority_over_last_known_name(self, store):
@@ -178,7 +184,9 @@ class TestKnownDevices:
         """A device that only ever reported semantic (coordinate-less)
         locations never gets a row in `locations` at all."""
         store.set_last_seen_name("dev", "iPhone")
-        assert store.known_devices() == [{"id": "dev", "name": "iPhone", "last_seen": None}]
+        assert store.known_devices() == [
+            {"id": "dev", "name": "iPhone", "group": None, "last_seen": None, "point_count": 0}
+        ]
 
     def test_empty_name_does_not_overwrite_a_known_one(self, store):
         store.set_last_seen_name("dev", "iPhone")
@@ -210,6 +218,85 @@ class TestKnownDevices:
             assert opened.known_devices()[0]["name"] == "Car"
         finally:
             opened.close()
+
+
+class TestDeviceGroups:
+    def test_set_and_read_back_a_group(self, store):
+        store.set_setting("dev", name="Phone", color="", group="Familie")
+        assert store.get_settings()["dev"]["group"] == "Familie"
+
+    def test_clearing_the_group_stores_null(self, store):
+        store.set_setting("dev", name="Phone", color="", group="Familie")
+        store.set_setting("dev", name="Phone", color="", group="")
+        assert store.get_settings()["dev"]["group"] is None
+
+    def test_known_devices_carries_the_group(self, store):
+        store.add("dev", pt(time=1000))
+        store.set_setting("dev", name="Phone", color="", group="Fahrzeuge")
+        assert store.known_devices()[0]["group"] == "Fahrzeuge"
+
+    def test_group_survives_a_last_seen_name_write(self, store):
+        store.set_setting("dev", name="Phone", color="", group="Familie")
+        store.set_last_seen_name("dev", "Pixel 8")   # targeted upsert
+        assert store.get_settings()["dev"]["group"] == "Familie"
+
+    def test_last_seen_name_survives_a_group_write(self, store):
+        store.set_last_seen_name("dev", "Pixel 8")
+        store.set_setting("dev", name="", color="", group="Familie")
+        assert store.known_devices()[0]["name"] == "Pixel 8"
+
+    def test_migrating_an_existing_db_adds_the_device_group_column(self, tmp_path):
+        path = tmp_path / "history.db"
+        conn = sqlite3.connect(str(path))
+        conn.execute(
+            "CREATE TABLE device_settings "
+            "(device_id TEXT PRIMARY KEY, name TEXT, color TEXT, last_known_name TEXT)"
+        )
+        conn.execute("INSERT INTO device_settings (device_id, name) VALUES ('dev', 'Car')")
+        conn.commit()
+        conn.close()
+
+        opened = LocationStore(path)
+        try:
+            opened.set_setting("dev", name="Car", color="", group="Fahrzeuge")
+            assert opened.get_settings()["dev"]["group"] == "Fahrzeuge"
+        finally:
+            opened.close()
+
+
+class TestDeleteDevice:
+    def test_removes_history_and_settings_and_reports_the_count(self, store):
+        for t in (100, 200, 300):
+            store.add("dev", pt(time=t))
+        store.set_setting("dev", name="Old", color="", group="G")
+
+        removed = store.delete_device("dev")
+
+        assert removed == 3
+        assert store.range("dev", 0, 1000) == []
+        assert store.get_settings() == {}
+        assert store.known_devices() == []
+
+    def test_only_touches_the_named_device(self, store):
+        store.add("a", pt(time=1))
+        store.add("b", pt(time=2))
+        store.set_setting("a", name="A")
+        store.set_setting("b", name="B")
+
+        store.delete_device("a")
+
+        assert [d["id"] for d in store.known_devices()] == ["b"]
+        assert store.get_settings() == {"b": {"name": "B", "color": None, "group": None}}
+
+    def test_deleting_an_unknown_device_is_a_harmless_noop(self, store):
+        store.add("real", pt(time=1))
+        assert store.delete_device("ghost") == 0
+        assert [d["id"] for d in store.known_devices()] == ["real"]
+
+    def test_point_count_is_reported_by_known_devices(self, store):
+        for t in (1, 2, 3, 4):
+            store.add("dev", pt(time=t))
+        assert store.known_devices()[0]["point_count"] == 4
 
 
 class TestGeocodeCache:

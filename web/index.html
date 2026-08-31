@@ -11,6 +11,7 @@
 <script src="app.js"></script>
 </head>
 <body>
+<div id="poll-alert" class="poll-alert" hidden></div>
 <div id="app">
   <div id="map"></div>
   <aside id="sidebar">
@@ -27,6 +28,7 @@
     <ul id="device-list"></ul>
   </aside>
 </div>
+<datalist id="fmm-groups"></datalist>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -44,7 +46,21 @@ const markerById = new Map(); // device id -> current-position marker
 let hasFitBounds = false;
 let palette = [];         // pin colours offered in the editor (from the API)
 let lastDevices = [];     // most recent device list, for re-rendering without a fetch
-let editState = null;     // { id, name, color } while a device editor is open
+let editState = null;     // { id, name, color, group } while a device editor is open
+
+// Which named groups are collapsed in the list -- also hides their pins on
+// the map. Remembered per browser.
+const collapsedGroups = new Set((() => {
+  try {
+    const v = JSON.parse(localStorage.getItem('fmm.collapsedGroups') || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch (e) { return []; }
+})());
+function persistCollapsedGroups() {
+  try {
+    localStorage.setItem('fmm.collapsedGroups', JSON.stringify([...collapsedGroups]));
+  } catch (e) {}
+}
 
 const t = (k, v) => window.FindMyMap.t(k, v);
 const loc = () => window.FindMyMap.locale();
@@ -99,6 +115,8 @@ function popupHtml(device) {
 }
 
 function drawDevice(device) {
+  // A collapsed group hides its devices from the map too.
+  if (device.group && collapsedGroups.has(device.group)) return [];
   const color = device.color || '#4e9bff';
   const track = (device.history || []).filter(p => p.latitude != null && p.longitude != null);
   const latlngs = track.map(p => [p.latitude, p.longitude]);
@@ -170,11 +188,11 @@ function mkBtn(label, className, onClick) {
   return b;
 }
 
-async function putDeviceSettings(id, name, color) {
+async function putDeviceSettings(id, name, color, group) {
   const res = await fetch(`/api/devices/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, color }),
+    body: JSON.stringify({ name, color, group }),
   });
   if (!res.ok) throw new Error('save failed');
 }
@@ -215,6 +233,16 @@ function buildEditor(device) {
   }
   colorField.appendChild(swatches);
 
+  const groupField = document.createElement('div');
+  groupField.className = 'field';
+  groupField.innerHTML = `<label>${t('f_group')}</label>`;
+  const groupInput = document.createElement('input');
+  groupInput.type = 'text';
+  groupInput.setAttribute('list', 'fmm-groups');
+  groupInput.value = editState.group || '';
+  groupInput.addEventListener('input', () => { editState.group = groupInput.value; });
+  groupField.appendChild(groupInput);
+
   const actions = document.createElement('div');
   actions.className = 'editor-actions';
   actions.append(
@@ -224,20 +252,86 @@ function buildEditor(device) {
         device.id,
         name === (device.default_name || '') ? '' : name,
         editState.colorCustom ? (editState.color || '') : '',
+        (editState.group || '').trim(),
       );
       editState = null;
       await refresh();
     }),
     mkBtn(t('cancel'), 'btn btn-small', () => { editState = null; renderList(lastDevices); }),
     mkBtn(t('reset_default'), 'btn btn-small', async () => {
-      await putDeviceSettings(device.id, '', '');
+      await putDeviceSettings(device.id, '', '', '');
       editState = null;
       await refresh();
     }),
   );
 
-  box.append(nameField, colorField, actions);
+  box.append(nameField, colorField, groupField, actions);
   return box;
+}
+
+function buildDeviceLi(device) {
+  const li = document.createElement('li');
+
+  const row = document.createElement('div');
+  row.className = 'device';
+  // A semantic fix has no coordinates (nothing to put on the map -- see
+  // drawDevice()), so show the place name here instead of just a time.
+  const when = device.type === 'semantic' && device.place_name
+    ? t('at_place', { place: escapeHtml(device.place_name), time: fmtTime(device.last_location_time) })
+    : escapeHtml(device.last_location_time
+        ? fmtTime(device.last_location_time)
+        : errorLabel(device.error));
+  row.innerHTML = `
+    <span class="dot" style="background:${device.color || '#4e9bff'}"></span>
+    <span class="meta">
+      <span class="name">${escapeHtml(device.name)}</span>
+      <span class="time${device.last_location_time ? '' : ' error-row'}">${when}</span>
+    </span>
+    <span class="device-actions">
+      <button class="device-ring-btn" type="button" title="${t('ring')}" aria-label="${t('ring')}">&#128276;</button>
+      <button class="device-edit-btn" type="button" title="${t('edit')}" aria-label="${t('edit')}">&#9998;</button>
+    </span>
+  `;
+  row.addEventListener('click', () => focusDevice(device.id));
+  row.querySelector('.device-edit-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    editState = (editState && editState.id === device.id)
+      ? null
+      : {
+          id: device.id,
+          name: device.name || '',
+          color: device.color || '',
+          colorCustom: !!device.color_is_custom,
+          group: device.group || '',
+        };
+    renderList(lastDevices);
+  });
+  row.querySelector('.device-ring-btn').addEventListener('click', async e => {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    const ringing = btn.classList.contains('ringing');
+    btn.disabled = true;
+    btn.classList.remove('ring-failed');
+    btn.classList.add('pending');   // shakes immediately, before the fetch even resolves
+    try {
+      const res = await fetch(
+        `/api/devices/${encodeURIComponent(device.id)}/ring${ringing ? '/stop' : ''}`,
+        { method: 'POST' },
+      );
+      btn.classList.remove('pending');
+      if (res.ok) setRinging(btn, !ringing);
+      else flashRingFailed(btn);
+    } catch (err) {
+      flashRingFailed(btn);
+    }
+    btn.disabled = false;
+  });
+  li.appendChild(row);
+
+  if (editState && editState.id === device.id) {
+    li.appendChild(buildEditor(device));
+  }
+  return li;
 }
 
 function renderList(devices) {
@@ -248,69 +342,54 @@ function renderList(devices) {
     (a, b) => (b.last_location_time || 0) - (a.last_location_time || 0)
   );
 
-  for (const device of sorted) {
-    const li = document.createElement('li');
+  const named = [...new Set(devices.map(d => d.group).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
 
-    const row = document.createElement('div');
-    row.className = 'device';
-    // A semantic fix has no coordinates (nothing to put on the map -- see
-    // drawDevice()), so show the place name here instead of just a time.
-    const when = device.type === 'semantic' && device.place_name
-      ? t('at_place', { place: escapeHtml(device.place_name), time: fmtTime(device.last_location_time) })
-      : escapeHtml(device.last_location_time
-          ? fmtTime(device.last_location_time)
-          : errorLabel(device.error));
-    row.innerHTML = `
-      <span class="dot" style="background:${device.color || '#4e9bff'}"></span>
-      <span class="meta">
-        <span class="name">${escapeHtml(device.name)}</span>
-        <span class="time${device.last_location_time ? '' : ' error-row'}">${when}</span>
-      </span>
-      <span class="device-actions">
-        <button class="device-ring-btn" type="button" title="${t('ring')}" aria-label="${t('ring')}">&#128276;</button>
-        <button class="device-edit-btn" type="button" title="${t('edit')}" aria-label="${t('edit')}">&#9998;</button>
-      </span>
-    `;
-    row.addEventListener('click', () => focusDevice(device.id));
-    row.querySelector('.device-edit-btn').addEventListener('click', e => {
-      e.stopPropagation();
-      editState = (editState && editState.id === device.id)
-        ? null
-        : {
-            id: device.id,
-            name: device.name || '',
-            color: device.color || '',
-            colorCustom: !!device.color_is_custom,
-          };
-      renderList(lastDevices);
-    });
-    row.querySelector('.device-ring-btn').addEventListener('click', async e => {
-      e.stopPropagation();
-      const btn = e.currentTarget;
-      const ringing = btn.classList.contains('ringing');
-      btn.disabled = true;
-      btn.classList.remove('ring-failed');
-      btn.classList.add('pending');   // shakes immediately, before the fetch even resolves
-      try {
-        const res = await fetch(
-          `/api/devices/${encodeURIComponent(device.id)}/ring${ringing ? '/stop' : ''}`,
-          { method: 'POST' },
-        );
-        btn.classList.remove('pending');
-        if (res.ok) setRinging(btn, !ringing);
-        else flashRingFailed(btn);
-      } catch (err) {
-        flashRingFailed(btn);
-      }
-      btn.disabled = false;
-    });
-    li.appendChild(row);
+  // Keep the editor's group datalist in sync with the groups in use.
+  const dl = document.getElementById('fmm-groups');
+  if (dl) dl.innerHTML = named.map(g => `<option value="${escapeHtml(g)}"></option>`).join('');
 
-    if (editState && editState.id === device.id) {
-      li.appendChild(buildEditor(device));
-    }
-    list.appendChild(li);
+  // No groups anywhere -> the original flat list, unchanged.
+  if (!named.length) {
+    for (const device of sorted) list.appendChild(buildDeviceLi(device));
+    return;
   }
+
+  const bucket = new Map(named.map(g => [g, []]));
+  const ungrouped = [];
+  for (const d of sorted) (d.group ? bucket.get(d.group) : ungrouped).push(d);
+
+  const sections = named.map(g => [g, bucket.get(g)]);
+  if (ungrouped.length) sections.push([null, ungrouped]);
+
+  for (const [group, items] of sections) {
+    const collapsed = group !== null && collapsedGroups.has(group);
+    const header = document.createElement('li');
+    header.className = 'group-header' + (collapsed ? ' collapsed' : '');
+    header.innerHTML = `
+      <span class="caret">&#9662;</span>
+      <span class="group-name">${escapeHtml(group === null ? t('ungrouped') : group)}</span>
+      <span class="group-count">${items.length}</span>`;
+    if (group !== null) {
+      header.addEventListener('click', () => {
+        collapsedGroups.has(group) ? collapsedGroups.delete(group) : collapsedGroups.add(group);
+        persistCollapsedGroups();
+        redrawFromCache();
+      });
+    }
+    list.appendChild(header);
+    if (collapsed) continue;
+    for (const device of items) list.appendChild(buildDeviceLi(device));
+  }
+}
+
+// Redraw the map + list from the cached device list, no fetch. Used when a
+// group is collapsed/expanded.
+function redrawFromCache() {
+  deviceLayer.clearLayers();
+  markerById.clear();
+  for (const device of lastDevices) drawDevice(device);
+  renderList(lastDevices);
 }
 
 async function refresh() {
@@ -325,6 +404,7 @@ async function refresh() {
   }
 
   renderStatus(state);
+  window.FindMyMap.renderPollAlert(state);
 
   palette = state.palette || [];
   const devices = state.devices || [];

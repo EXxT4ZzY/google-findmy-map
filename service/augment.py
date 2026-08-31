@@ -52,6 +52,7 @@ def augment_device(
     device["name"] = override.get("name") or device["default_name"]
     device["name_is_custom"] = bool(override.get("name"))
     device["color_is_custom"] = bool(override.get("color"))
+    device["group"] = override.get("group") or None
     # Remembered even after the device drops out of the live poll list --
     # see LocationStore.known_devices().
     store.set_last_seen_name(device["id"], device["default_name"])

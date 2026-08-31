@@ -63,6 +63,26 @@
       <button type="button" id="auth-save" class="btn btn-primary" data-i18n="save">Save</button>
       <button type="button" id="logout-btn" class="btn" data-i18n="log_out" hidden>Log out</button>
     </section>
+
+    <section class="settings-section">
+      <h2 data-i18n="s_export">Data export</h2>
+      <div class="field">
+        <label for="export-device" data-i18n="f_device">Device</label>
+        <select id="export-device"></select>
+      </div>
+      <div class="export-row">
+        <a id="exp-full-gpx" download>GPX</a>
+        <a id="exp-full-geojson" download>GeoJSON</a>
+        <a id="exp-full-csv" download>CSV</a>
+      </div>
+      <div class="muted" data-i18n="export_hint_full">The complete history for this device.</div>
+    </section>
+
+    <section class="settings-section">
+      <h2 data-i18n="s_devices">Old devices</h2>
+      <div class="muted" data-i18n="dev_stale_hint">Devices that no longer appear on the map. Deleting one removes its whole history and settings — it cannot be undone.</div>
+      <div id="stale-devices"></div>
+    </section>
   </div>
 </main>
 <script>
@@ -174,7 +194,125 @@
     location.replace('/login.html');
   });
 
-  FMM.onLangChange = () => { renderLang(); renderAuth(); };
+  // ---- data export -------------------------------------------------------
+  const exportSel = document.getElementById('export-device');
+  function updateExportLinks() {
+    const id = exportSel.value;
+    for (const fmt of ['gpx', 'geojson', 'csv']) {
+      document.getElementById('exp-full-' + fmt).href = id
+        ? `/api/export/history?device=${encodeURIComponent(id)}&format=${fmt}`
+        : '#';
+    }
+  }
+  exportSel.addEventListener('change', updateExportLinks);
+
+  // ---- device list + delete of stale devices ---------------------------
+  const staleBox = document.getElementById('stale-devices');
+  const nf = new Intl.NumberFormat(FMM.locale());
+
+  function fmtSeen(ts) {
+    return ts
+      ? new Date(ts * 1000).toLocaleDateString(FMM.locale(), { day: 'numeric', month: 'short', year: 'numeric' })
+      : t('dev_never_seen');
+  }
+
+  async function loadDevices() {
+    let devices = [];
+    try { devices = (await (await fetch('/api/devices')).json()).devices || []; }
+    catch (e) { return; }
+
+    // export select: every device
+    exportSel.innerHTML = '';
+    for (const d of devices) {
+      const o = document.createElement('option');
+      o.value = d.id; o.textContent = d.name || d.id;
+      exportSel.appendChild(o);
+    }
+    updateExportLinks();
+
+    // stale list: only devices no longer in the live poll
+    const stale = devices.filter(d => !d.live);
+    staleBox.innerHTML = '';
+    if (!stale.length) {
+      const p = document.createElement('div');
+      p.className = 'muted'; p.style.marginTop = '10px';
+      p.textContent = t('dev_none');
+      staleBox.appendChild(p);
+      return;
+    }
+    for (const d of stale) staleBox.appendChild(deviceRow(d));
+  }
+
+  function deviceRow(d) {
+    const row = document.createElement('div');
+    row.className = 'stale-device';
+
+    const meta = document.createElement('div');
+    meta.className = 'stale-meta';
+    // The FULL id is shown (it is the only unambiguous identifier -- two
+    // devices renamed to the same display name are otherwise identical
+    // here), alongside the last-seen date and point count.
+    meta.innerHTML =
+      `<span class="stale-name"></span>` +
+      `<span class="stale-sub"><span class="s1"></span> · <span class="s2"></span></span>` +
+      `<code class="stale-id"></code>`;
+    meta.querySelector('.stale-name').textContent = d.name || d.id;
+    meta.querySelector('.stale-id').textContent = d.id;
+    meta.querySelector('.s1').textContent = fmtSeen(d.last_seen);
+    meta.querySelector('.s2').textContent = t('dev_points', { n: nf.format(d.point_count) });
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'btn btn-small';
+    del.textContent = t('dev_delete');
+
+    del.addEventListener('click', () => {
+      // Inline confirm -- no popup. The id is restated so the operator sees
+      // exactly which device is going, even with a duplicate name.
+      row.classList.add('confirming');
+      row.innerHTML = '';
+      const q = document.createElement('div');
+      q.className = 'stale-confirm';
+      q.textContent = t('dev_confirm_q', {
+        name: d.name || d.id,
+        id: d.id,
+        n: nf.format(d.point_count),
+      });
+      const idEl = document.createElement('code');
+      idEl.className = 'stale-id';
+      idEl.textContent = d.id;
+      const go = document.createElement('button');
+      go.type = 'button'; go.className = 'btn btn-small btn-danger';
+      go.textContent = t('dev_confirm_go');
+      const cancel = document.createElement('button');
+      cancel.type = 'button'; cancel.className = 'btn btn-small';
+      cancel.textContent = t('cancel');
+      cancel.addEventListener('click', loadDevices);
+      go.addEventListener('click', async () => {
+        go.disabled = cancel.disabled = true;
+        try {
+          const res = await fetch('/api/devices/' + encodeURIComponent(d.id), { method: 'DELETE' });
+          if (!res.ok) throw new Error();
+        } catch (e) {
+          go.disabled = cancel.disabled = false;
+          go.textContent = t('login_error');
+          return;
+        }
+        loadDevices();
+      });
+      const actions = document.createElement('div');
+      actions.className = 'stale-actions';
+      actions.append(go, cancel);
+      row.append(q, idEl, actions);
+    });
+
+    row.append(meta, del);
+    return row;
+  }
+
+  loadDevices();
+
+  FMM.onLangChange = () => { renderLang(); renderAuth(); loadDevices(); };
   load();
 })();
 </script>

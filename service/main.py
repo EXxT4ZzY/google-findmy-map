@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 import auth
 import colors
+import export
 import locations
 import visits as visits_mod
 from augment import augment_device
@@ -53,6 +54,11 @@ HISTORY_RETENTION_DAYS = float(os.environ.get("GFM_HISTORY_RETENTION_DAYS", "") 
 _PRUNE_INTERVAL_SECONDS = 24 * 3600
 _last_prune = {"at": 0.0}
 
+# The alert banner turns on after this many poll cycles in a row have
+# produced no usable data (either poll_all_devices() raised, or it returned
+# devices that ALL carried an error -- the shape an expired token takes).
+POLL_ALERT_AFTER = int(os.environ.get("GFM_POLL_ALERT_AFTER", "3"))
+
 AUTH_DISABLED = os.environ.get("GFM_AUTH_DISABLE", "").strip().lower() in ("1", "true", "yes")
 
 
@@ -73,7 +79,8 @@ LOGIN_DELAY_SECONDS = _login_delay_seconds()
 DEFAULT_HISTORY_WINDOW_SECONDS = 7 * 24 * 3600
 
 _state_lock = threading.Lock()
-_state = {"devices": [], "last_poll": None, "last_error": None}
+_state = {"devices": [], "last_poll": None, "last_error": None,
+          "consecutive_failures": 0}
 _store = LocationStore(HISTORY_DB)
 _store.migrate_json(LEGACY_HISTORY_JSON)
 _settings = _store.get_settings()  # {device_id: {"name", "color"}} from the web UI
@@ -112,22 +119,45 @@ def _maybe_prune_history():
         )
 
 
+def _run_poll_cycle() -> bool:
+    """One poll pass. Returns True if it produced usable data (or the
+    account is simply empty), False if it failed.
+
+    ``SystemExit`` is caught alongside ``Exception``: the vendored library
+    calls ``exit()`` on some unrecoverable key-version mismatches, which
+    would otherwise kill this daemon thread outright and freeze the map at
+    the last good fix with no visible warning.
+    """
+    try:
+        devices = locations.poll_all_devices()
+    except (Exception, SystemExit) as exc:
+        log.exception("Polling cycle failed")
+        with _state_lock:
+            _state["last_error"] = str(exc) or exc.__class__.__name__
+            _state["consecutive_failures"] += 1
+        return False
+
+    fresh = [d for d in devices if "error" not in d]
+    with _state_lock:
+        _state["devices"] = _augment_all(devices)
+        if devices and not fresh:
+            # Every device errored -- the poll "worked" but got nothing.
+            _state["last_error"] = "every device reported an error"
+            _state["consecutive_failures"] += 1
+            ok = False
+        else:
+            _state["last_poll"] = int(time.time())
+            _state["last_error"] = None
+            _state["consecutive_failures"] = 0
+            ok = True
+    log.info("Polled %d device(s)%s.", len(devices), "" if ok else " -- all errored")
+    return ok
+
+
 def _poll_loop():
     while True:
-        try:
-            devices = locations.poll_all_devices()
-            with _state_lock:
-                _state["devices"] = _augment_all(devices)
-                _state["last_poll"] = int(time.time())
-                _state["last_error"] = None
-            log.info("Polled %d device(s).", len(devices))
-        except Exception as exc:
-            log.exception("Polling cycle failed")
-            with _state_lock:
-                _state["last_error"] = str(exc)
-
+        _run_poll_cycle()
         _maybe_prune_history()
-
         _refresh_now.wait(POLL_INTERVAL_SECONDS)
         _refresh_now.clear()
 
@@ -151,6 +181,7 @@ PASSWORD_MIN_LENGTH = 8
 PUBLIC_PATHS = {
     "/login.html", "/app.css", "/app.js", "/favicon.ico", "/favicon.svg",
     "/api/auth/login", "/api/auth/status", "/api/auth/logout",
+    "/api/health",
 }
 
 
@@ -252,12 +283,61 @@ def _device_name(device_id):
     return None
 
 
+def _device_display_name(device_id):
+    """Best display name for a device that may not be in the current poll
+    (used by the export endpoints). Live name, then the stored
+    override / last-seen name, then the raw id."""
+    live = _device_name(device_id)
+    if live:
+        return live
+    for d in _store.known_devices():
+        if d["id"] == device_id:
+            return d["name"]
+    return device_id
+
+
+def _poll_alert(failures: int) -> bool:
+    return POLL_ALERT_AFTER > 0 and failures >= POLL_ALERT_AFTER
+
+
+def _poll_stale(last_poll) -> bool:
+    """No fresh data in a long time even though the failure counter never
+    tripped -- catches a hung or dead poll thread, where ``last_poll`` just
+    stops advancing."""
+    if last_poll is None:
+        return False   # nothing has succeeded yet; not necessarily broken
+    window = max(600, (POLL_ALERT_AFTER + 2) * POLL_INTERVAL_SECONDS)
+    return time.time() - last_poll > window
+
+
 @app.get("/api/locations")
 def get_locations():
     with _state_lock:
         payload = dict(_state)
     payload["palette"] = colors.PALETTE
+    payload["poll_alert"] = _poll_alert(payload["consecutive_failures"])
+    payload["poll_stale"] = _poll_stale(payload["last_poll"])
+    payload["poll_interval_seconds"] = POLL_INTERVAL_SECONDS
     return JSONResponse(payload)
+
+
+@app.get("/api/health")
+def get_health():
+    """Public liveness probe for external uptime monitors. Deliberately
+    carries no error string -- it is reachable without the optional login."""
+    with _state_lock:
+        last_poll = _state["last_poll"]
+        failures = _state["consecutive_failures"]
+    alert = _poll_alert(failures)
+    stale = _poll_stale(last_poll)
+    return {
+        "ok": not (alert or stale),
+        "poll_alert": alert,
+        "poll_stale": stale,
+        "last_poll": last_poll,
+        "consecutive_failures": failures,
+        "poll_interval_seconds": POLL_INTERVAL_SECONDS,
+    }
 
 
 @app.get("/api/devices")
@@ -265,8 +345,14 @@ def get_devices():
     """Every device ever seen, including ones no longer in the live poll --
     unlike /api/locations' `devices`, which only lists the current poll.
     Used by the timeline's device picker so a removed device's history
-    stays reachable."""
-    return {"devices": _store.known_devices()}
+    stays reachable. `live` is True while the device is in the current
+    poll (the settings page only offers *stale* devices for deletion)."""
+    with _state_lock:
+        live = {d["id"] for d in _state["devices"]}
+    devices = _store.known_devices()
+    for d in devices:
+        d["live"] = d["id"] in live
+    return {"devices": devices}
 
 
 @app.post("/api/refresh", dependencies=[Depends(block_cross_site)])
@@ -278,6 +364,7 @@ def trigger_refresh():
 class DeviceSettingsBody(BaseModel):
     name: str | None = None
     color: str | None = None
+    group: str | None = None
 
 
 class LoginBody(BaseModel):
@@ -294,13 +381,15 @@ class AuthSettingsBody(BaseModel):
 
 @app.put("/api/devices/{device_id}", dependencies=[Depends(block_cross_site)])
 def update_device(device_id: str, body: DeviceSettingsBody):
-    """Set (or clear, with empty values) a device's display name and pin colour."""
+    """Set (or clear, with empty values) a device's display name, pin colour
+    and group."""
     name = (body.name or "").strip()
     color = (body.color or "").strip()
+    group = (body.group or "").strip()[:40]
     if color and not _HEX_COLOR.match(color):
         raise HTTPException(status_code=422, detail="color must be #rrggbb or empty")
 
-    _store.set_setting(device_id, name=name, color=color)
+    _store.set_setting(device_id, name=name, color=color, group=group)
 
     global _settings
     _settings = _store.get_settings()
@@ -309,8 +398,33 @@ def update_device(device_id: str, body: DeviceSettingsBody):
 
     return {
         "status": "ok",
-        "settings": _settings.get(device_id, {"name": None, "color": None}),
+        "settings": _settings.get(device_id, {"name": None, "color": None, "group": None}),
     }
+
+
+@app.delete("/api/devices/{device_id}", dependencies=[Depends(block_cross_site)])
+def delete_device(device_id: str):
+    """Forget a stale device: its whole history and its name/colour/group
+    override. Refused (409) while the device is still in the live poll --
+    it would only re-appear and re-accumulate history on the next cycle.
+
+    Deletion is keyed strictly on the device *id* (the path parameter), so
+    two devices the operator happened to rename to the same display name
+    stay independently addressable -- there is no code path that resolves a
+    delete by name.
+    """
+    with _state_lock:
+        if any(d["id"] == device_id for d in _state["devices"]):
+            raise HTTPException(status_code=409, detail="device is currently active")
+
+    removed = _store.delete_device(device_id)
+
+    global _settings
+    _settings = _store.get_settings()
+    with _state_lock:
+        _state["devices"] = _augment_all(_state["devices"])
+
+    return {"deleted": device_id, "points": removed}
 
 
 @app.post("/api/devices/{device_id}/ring", dependencies=[Depends(block_cross_site)])
@@ -378,6 +492,63 @@ def get_visits(device: str, start: int | None = None, end: int | None = None):
         "pending": pending,
         "visits": out,
     }
+
+
+def _export_window(start, end):
+    """[lo, hi] for an export request. Both bounds omitted -> the whole
+    history for the device (start 0, end now)."""
+    now = int(time.time())
+    return (0 if start is None else int(start),
+            now if end is None else int(end))
+
+
+def _export_response(body, media_type, kind, ext, device, start, end):
+    name = export.filename_slug(_device_display_name(device))
+    span = "" if (start is None and end is None) else f"-{int(start)}-{int(end)}"
+    return Response(content=body, media_type=media_type, headers={
+        "Content-Disposition": f'attachment; filename="{name}-{kind}{span}.{ext}"',
+    })
+
+
+@app.get("/api/export/history")
+def export_history(device: str, format: str = "gpx",
+                   start: int | None = None, end: int | None = None):
+    """Download a device's track. ``start``/``end`` omitted -> full history."""
+    fmt = export.HISTORY_FORMATS.get(format)
+    if fmt is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"format must be one of {sorted(export.HISTORY_FORMATS)}",
+        )
+    lo, hi = _export_window(start, end)
+    points = _store.range(device, lo, hi)
+    formatter, media_type, ext = fmt
+    body = formatter(points, device, _device_display_name(device))
+    return _export_response(body, media_type, "history", ext, device, start, end)
+
+
+@app.get("/api/export/visits")
+def export_visits(device: str, format: str = "gpx",
+                  start: int | None = None, end: int | None = None):
+    """Download a device's visited places. Only geocode labels that are
+    already cached are attached -- export never kicks off new lookups."""
+    fmt = export.VISIT_FORMATS.get(format)
+    if fmt is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"format must be one of {sorted(export.VISIT_FORMATS)}",
+        )
+    lo, hi = _export_window(start, end)
+    found = visits_mod.detect_visits(
+        _store.range(device, lo, hi), VISIT_RADIUS_M, VISIT_MIN_SECONDS
+    )
+    for v in found:
+        cached = _geocoder.lookup(v["lat"], v["lon"])
+        v["label"] = cached["label"] if cached else None
+        v["address"] = cached["address"] if cached else None
+    formatter, media_type, ext = fmt
+    return _export_response(formatter(found), media_type, "visits", ext,
+                            device, start, end)
 
 
 @app.get("/api/auth/status")
