@@ -56,7 +56,8 @@ _last_prune = {"at": 0.0}
 
 # The alert banner turns on after this many poll cycles in a row have
 # produced no usable data (either poll_all_devices() raised, or it returned
-# devices that ALL carried an error -- the shape an expired token takes).
+# at least one device carrying an error -- the shape an expired token takes.
+# A single healthy device does not mask errors on the rest of the fleet.)
 POLL_ALERT_AFTER = int(os.environ.get("GFM_POLL_ALERT_AFTER", "3"))
 
 AUTH_DISABLED = os.environ.get("GFM_AUTH_DISABLE", "").strip().lower() in ("1", "true", "yes")
@@ -137,12 +138,17 @@ def _run_poll_cycle() -> bool:
             _state["consecutive_failures"] += 1
         return False
 
-    fresh = [d for d in devices if "error" not in d]
+    errored = [d for d in devices if "error" in d]
     with _state_lock:
         _state["devices"] = _augment_all(devices)
-        if devices and not fresh:
-            # Every device errored -- the poll "worked" but got nothing.
-            _state["last_error"] = "every device reported an error"
+        if devices and errored:
+            # At least one device errored -- flag it even if the rest of
+            # the fleet is fine, so an alert doesn't hide behind one lucky
+            # device (e.g. 9 of 10 tokens expired but one keeps working).
+            _state["last_error"] = (
+                "every device reported an error" if len(errored) == len(devices)
+                else f"{len(errored)} of {len(devices)} device(s) reported an error"
+            )
             _state["consecutive_failures"] += 1
             ok = False
         else:
@@ -150,7 +156,7 @@ def _run_poll_cycle() -> bool:
             _state["last_error"] = None
             _state["consecutive_failures"] = 0
             ok = True
-    log.info("Polled %d device(s)%s.", len(devices), "" if ok else " -- all errored")
+    log.info("Polled %d device(s)%s.", len(devices), "" if ok else " -- some errored")
     return ok
 
 

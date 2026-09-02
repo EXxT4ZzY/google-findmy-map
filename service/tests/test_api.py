@@ -446,7 +446,9 @@ class TestPollAlert:
         assert body["last_error"] == "every device reported an error"
         assert main._state["last_poll"] == before
 
-    def test_a_partial_failure_does_not_alert(self, client):
+    def test_a_partial_failure_does_alert(self, client):
+        """A single healthy device must not mask errors on the rest of the
+        fleet (e.g. 9 of 10 tokens expired but one keeps working)."""
         main = client._main
         main.locations.poll_all_devices = lambda: [
             {"id": "d1", "name": "A", "type": "geo",
@@ -457,8 +459,22 @@ class TestPollAlert:
         for _ in range(5):
             main._run_poll_cycle()
         body = client.get("/api/locations").json()
-        assert body["poll_alert"] is False
-        assert body["consecutive_failures"] == 0
+        assert body["poll_alert"] is True
+        assert body["consecutive_failures"] == 5
+        assert body["last_error"] == "1 of 2 device(s) reported an error"
+
+    def test_partial_failure_message_counts_the_errored_devices(self, client):
+        main = client._main
+        main.locations.poll_all_devices = lambda: [
+            {"id": "d1", "name": "A", "type": "geo",
+             "latitude": 1, "longitude": 2, "time": 5, "accuracy": 3},
+            {"id": "d2", "name": "B", "error": "no_response"},
+            {"id": "d3", "name": "C", "error": "no_response"},
+        ]
+        main._state["consecutive_failures"] = 0
+        main._run_poll_cycle()
+        assert client.get("/api/locations").json()["last_error"] == \
+            "2 of 3 device(s) reported an error"
 
     def test_systemexit_from_the_vendored_lib_is_caught(self, client):
         main = client._main
