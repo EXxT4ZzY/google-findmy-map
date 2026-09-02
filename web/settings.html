@@ -290,10 +290,24 @@
       cancel.addEventListener('click', loadDevices);
       go.addEventListener('click', async () => {
         go.disabled = cancel.disabled = true;
+        let res;
         try {
-          const res = await fetch('/api/devices/' + encodeURIComponent(d.id), { method: 'DELETE' });
-          if (!res.ok) throw new Error();
+          res = await fetch('/api/devices/' + encodeURIComponent(d.id), { method: 'DELETE' });
         } catch (e) {
+          go.disabled = cancel.disabled = false;
+          go.textContent = t('login_error');
+          return;
+        }
+        if (res.status === 409) {
+          // The device came back online between listing and deleting -- say
+          // so specifically (not the generic error) and refresh shortly
+          // after so the row reflects that, instead of staying armed for an
+          // endless, equally-doomed retry against a now-stale snapshot.
+          go.textContent = t('dev_delete_active');
+          setTimeout(loadDevices, 1500);
+          return;
+        }
+        if (!res.ok) {
           go.disabled = cancel.disabled = false;
           go.textContent = t('login_error');
           return;

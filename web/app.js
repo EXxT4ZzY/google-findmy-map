@@ -119,6 +119,7 @@
       dev_delete: 'Delete',
       dev_confirm_q: 'Permanently delete “{name}” and its {n} location points? Check the id below — this cannot be undone.',
       dev_confirm_go: 'Delete',
+      dev_delete_active: 'Device is active again — refreshing the list.',
       dev_none: 'No old devices — every device is still active.',
     },
     de: {
@@ -232,6 +233,7 @@
       dev_delete: 'Löschen',
       dev_confirm_q: '„{name}“ mit {n} Standortpunkten endgültig löschen? Prüfe die ID unten — das lässt sich nicht rückgängig machen.',
       dev_confirm_go: 'Löschen',
+      dev_delete_active: 'Gerät ist wieder aktiv — Liste wird aktualisiert.',
       dev_none: 'Keine alten Geräte — alle Geräte sind noch aktiv.',
     },
   };

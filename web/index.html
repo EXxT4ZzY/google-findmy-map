@@ -239,6 +239,9 @@ function buildEditor(device) {
   const groupInput = document.createElement('input');
   groupInput.type = 'text';
   groupInput.setAttribute('list', 'fmm-groups');
+  // Matches the server-side cap (main.py: group[:40]) so a name is never
+  // silently truncated after saving with no feedback.
+  groupInput.maxLength = 40;
   groupInput.value = editState.group || '';
   groupInput.addEventListener('input', () => { editState.group = groupInput.value; });
   groupField.appendChild(groupInput);
