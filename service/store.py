@@ -161,6 +161,11 @@ class LocationStore:
                 self._conn.commit()
                 return cur.rowcount
             except sqlite3.Error as exc:
+                # The two DELETEs above must succeed together or not at all --
+                # without this rollback, a failure on the second statement
+                # would leave the first one applied-but-uncommitted on this
+                # connection, silently reported to the caller as "0 removed".
+                self._conn.rollback()
                 log.warning("Could not delete device %r: %s", device_id, exc)
                 return 0
 

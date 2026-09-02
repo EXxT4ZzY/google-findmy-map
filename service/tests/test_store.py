@@ -298,6 +298,41 @@ class TestDeleteDevice:
             store.add("dev", pt(time=t))
         assert store.known_devices()[0]["point_count"] == 4
 
+    def test_a_failure_partway_through_rolls_back_the_first_delete(self, store, monkeypatch):
+        """delete_device() runs two DELETEs under one commit. If the second
+        one fails, the first must not be left applied-but-uncommitted on the
+        connection -- it needs an explicit rollback()."""
+        store.add("dev", pt(time=100))
+        store.set_setting("dev", name="Old")
+
+        # sqlite3.Connection.execute is a C-level, read-only attribute on an
+        # immutable type -- can't be monkeypatched directly. Swap in a thin
+        # proxy on store._conn instead (a plain Python attribute) that fails
+        # on the second execute() and forwards everything else untouched.
+        class FlakyConn:
+            def __init__(self, real):
+                self._real = real
+                self.calls = 0
+
+            def execute(self, sql, *args, **kwargs):
+                self.calls += 1
+                if self.calls == 2:  # the device_settings DELETE
+                    raise sqlite3.Error("simulated failure")
+                return self._real.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        monkeypatch.setattr(store, "_conn", FlakyConn(store._conn))
+        removed = store.delete_device("dev")
+        monkeypatch.undo()
+
+        assert removed == 0
+        # The first DELETE (locations) must have been rolled back, not just
+        # left uncommitted -- otherwise this read would already see it gone.
+        assert store.range("dev", 0, 1000) != []
+        assert store.get_settings() == {"dev": {"name": "Old", "color": None, "group": None}}
+
 
 class TestGeocodeCache:
     def test_miss_returns_none(self, store):

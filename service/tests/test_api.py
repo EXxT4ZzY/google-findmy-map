@@ -310,6 +310,33 @@ class TestDeleteDevice:
                            headers={"sec-fetch-site": "cross-site"})
         assert r.status_code == 403
 
+    def test_delete_holds_the_state_lock_across_the_db_delete(self, client):
+        """Regression guard for the TOCTOU race this endpoint's 409 exists to
+        prevent: the liveness check and the store delete must be atomic
+        against the poll thread, which also needs _state_lock to repopulate
+        _state["devices"]. Verified by probing whether the lock is already
+        held at the moment _store.delete_device() runs."""
+        main = client._main
+        self._stale_device(main, id="dev-old")
+        real_delete = main._store.delete_device
+        was_locked = {}
+
+        def spy(device_id):
+            got_it = main._state_lock.acquire(blocking=False)
+            if got_it:
+                main._state_lock.release()
+            was_locked["value"] = not got_it
+            return real_delete(device_id)
+
+        main._store.delete_device = spy
+        try:
+            r = client.request("DELETE", "/api/devices/dev-old")
+        finally:
+            main._store.delete_device = real_delete
+
+        assert r.status_code == 200
+        assert was_locked["value"] is True
+
 
 def test_semantic_location_does_not_clobber_the_device_name(client):
     """Regression test for the locations.py bug this feature fixed: merging

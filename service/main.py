@@ -412,17 +412,21 @@ def delete_device(device_id: str):
     two devices the operator happened to rename to the same display name
     stay independently addressable -- there is no code path that resolves a
     delete by name.
+
+    The liveness check and the delete itself share one lock acquisition so
+    the poll thread can't repopulate ``_state["devices"]`` with this id in
+    between (the device coming back online right after the check passed)
+    and let a delete through that the 409 was meant to prevent.
     """
     with _state_lock:
         if any(d["id"] == device_id for d in _state["devices"]):
             raise HTTPException(status_code=409, detail="device is currently active")
+        removed = _store.delete_device(device_id)
 
-    removed = _store.delete_device(device_id)
-
+    # No re-augment needed here: the check above guarantees device_id wasn't
+    # in _state["devices"], so the delete can't have changed that list.
     global _settings
     _settings = _store.get_settings()
-    with _state_lock:
-        _state["devices"] = _augment_all(_state["devices"])
 
     return {"deleted": device_id, "points": removed}
 
