@@ -604,6 +604,32 @@ class TestExport:
         assert r.headers["content-disposition"] == \
             'attachment; filename="dev-1-history-1700000030-1700000150.csv"'
 
+    def test_start_only_is_applied_and_reflected_in_the_filename(self, client):
+        """Regression test: only ``start`` set (``end`` omitted) used to
+        crash with a 500 (int(None) in the filename-span calculation)."""
+        self._seed(client._main._store)
+        r = client.get("/api/export/history", params={
+            "device": "dev-1", "format": "csv", "start": 1_700_000_090,
+        })
+        assert r.status_code == 200
+        rows = r.text.splitlines()
+        assert len(rows) == 1 + 2   # header + the two points from +120s/+180s
+        assert r.headers["content-disposition"].startswith(
+            'attachment; filename="dev-1-history-1700000090-')
+
+    def test_end_only_is_applied_and_reflected_in_the_filename(self, client):
+        """Regression test: only ``end`` set (``start`` omitted) used to
+        crash with a 500 (int(None) in the filename-span calculation)."""
+        self._seed(client._main._store)
+        r = client.get("/api/export/history", params={
+            "device": "dev-1", "format": "csv", "end": 1_700_000_090,
+        })
+        assert r.status_code == 200
+        rows = r.text.splitlines()
+        assert len(rows) == 1 + 2   # header + the two points from +0s/+60s
+        assert r.headers["content-disposition"] == \
+            'attachment; filename="dev-1-history-0-1700000090.csv"'
+
     def test_no_range_exports_the_full_history(self, client):
         self._seed(client._main._store)
         r = client.get("/api/export/history",

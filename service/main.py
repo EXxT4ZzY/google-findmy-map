@@ -506,9 +506,12 @@ def _export_window(start, end):
             now if end is None else int(end))
 
 
-def _export_response(body, media_type, kind, ext, device, start, end):
+def _export_response(body, media_type, kind, ext, device, lo, hi, has_range):
+    """``lo``/``hi`` are the already-resolved (never-None) window from
+    ``_export_window()``; ``has_range`` says whether the caller actually
+    asked for one, so a full-history export keeps its plain filename."""
     name = export.filename_slug(_device_display_name(device))
-    span = "" if (start is None and end is None) else f"-{int(start)}-{int(end)}"
+    span = f"-{lo}-{hi}" if has_range else ""
     return Response(content=body, media_type=media_type, headers={
         "Content-Disposition": f'attachment; filename="{name}-{kind}{span}.{ext}"',
     })
@@ -528,7 +531,8 @@ def export_history(device: str, format: str = "gpx",
     points = _store.range(device, lo, hi)
     formatter, media_type, ext = fmt
     body = formatter(points, device, _device_display_name(device))
-    return _export_response(body, media_type, "history", ext, device, start, end)
+    return _export_response(body, media_type, "history", ext, device, lo, hi,
+                            has_range=(start is not None or end is not None))
 
 
 @app.get("/api/export/visits")
@@ -552,7 +556,8 @@ def export_visits(device: str, format: str = "gpx",
         v["address"] = cached["address"] if cached else None
     formatter, media_type, ext = fmt
     return _export_response(formatter(found), media_type, "visits", ext,
-                            device, start, end)
+                            device, lo, hi,
+                            has_range=(start is not None or end is not None))
 
 
 @app.get("/api/auth/status")
