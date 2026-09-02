@@ -266,7 +266,7 @@ function stepRange(dir) {
   const d = new Date(anchor);
   if (rangeMode === 'day') d.setDate(d.getDate() + dir);
   else if (rangeMode === 'week') d.setDate(d.getDate() + 7 * dir);
-  else if (rangeMode === 'month') d.setMonth(d.getMonth() + dir);
+  else if (rangeMode === 'month') { d.setDate(1); d.setMonth(d.getMonth() + dir); }
   anchor = d;
   syncDateInputs();
   persistDateState();
